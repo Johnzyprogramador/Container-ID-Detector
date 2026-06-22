@@ -1,0 +1,41 @@
+# Annotation guide
+
+## What to box
+
+Draw one tight box around the complete painted identifier, with a small amount
+of surrounding background. Use the class `painted_number`.
+
+Include:
+
+- all digits belonging to the identifier;
+- worn or dirty identifiers that a person can still interpret;
+- partially occluded examples when the visible evidence is useful.
+
+Exclude:
+
+- phone numbers;
+- safety instructions;
+- graffiti;
+- logos and company names;
+- identifiers that are completely unreadable.
+
+## Transcription
+
+- Enter only the identifier characters, without spaces or punctuation.
+- For the current use case, use digits `0-9`.
+- Do not guess. Mark uncertain text as unreadable and leave transcription
+  empty.
+- Preserve leading zeroes.
+
+## Review states
+
+- `draft`: created but not independently checked.
+- `verified`: box and transcription checked.
+- `rejected`: annotation should not enter a dataset release.
+
+## Video frames
+
+Do not annotate hundreds of nearly identical adjacent frames. Select diverse
+frames covering changes in position, scale, angle, blur, occlusion, and light.
+Keep every frame from one visit in the same dataset split.
+

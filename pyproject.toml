@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "container-vision"
+version = "0.1.0"
+description = "Detection, recognition, and multi-frame reading of painted container IDs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+detection = ["ultralytics>=8.3", "opencv-python>=4.9"]
+recognition = ["easyocr>=1.7", "opencv-python>=4.9"]
+ui = ["gradio>=5"]
+all = [
+  "ultralytics>=8.3",
+  "easyocr>=1.7",
+  "opencv-python>=4.9",
+  "gradio>=5",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+

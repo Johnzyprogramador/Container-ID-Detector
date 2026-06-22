@@ -1,0 +1,21 @@
+schema_version: "1.0"
+
+detector:
+  model: yolo11n.pt
+  class_name: painted_number
+  confidence_threshold: 0.25
+  image_size: 640
+  crop_padding_fraction: 0.20
+
+recognizer:
+  allowed_characters: "0123456789"
+  expected_length: 3
+  minimum_confidence: 0.70
+
+video:
+  sample_every_n_frames: 1
+  minimum_crop_height_pixels: 30
+  maximum_votes_per_track: 20
+  stable_minimum_votes: 5
+  stable_agreement_ratio: 0.70
+

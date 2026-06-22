@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.cache/
+.DS_Store
+
+# Local evidence and generated artifacts
+data/*
+!data/README.md
+models/*
+!models/README.md
+runs/*
+!runs/README.md
+outputs/*
+!outputs/README.md
+
+# Model formats
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+
+# Local secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+

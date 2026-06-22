@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "image_id": "session_20260622_0001/frame_000125",
+  "session_id": "session_20260622_0001",
+  "file": "frames/frame_000125.jpg",
+  "width": 1920,
+  "height": 1080,
+  "objects": [
+    {
+      "object_id": "number_001",
+      "class_name": "painted_number",
+      "bbox_xyxy": [240, 310, 430, 440],
+      "transcription": "274",
+      "readable": true,
+      "occluded": false,
+      "review_status": "verified"
+    }
+  ]
+}
+

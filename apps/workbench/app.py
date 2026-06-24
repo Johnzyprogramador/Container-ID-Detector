@@ -4,8 +4,8 @@ This first workbench is intentionally dependency-free so it can run on a fresh
 remote Linux machine with only Python installed.
 
 Example:
-    python apps/workbench/app.py --images-dir data/raw/session_001 \
-      --annotations-dir data/annotations/manual/session_001 \
+    python apps/workbench/app.py --images-dir data/frames \
+      --annotations-dir data/annotations/manual \
       --host 0.0.0.0 --port 7860
 """
 
@@ -41,7 +41,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 class WorkbenchConfig:
     images_dir: Path
     annotations_dir: Path
-    session_id: str
+    session_id: str | None
     host: str
     port: int
 
@@ -60,31 +60,72 @@ def annotation_path_for(annotations_dir: Path, image_id: str) -> Path:
     return safe_relative_path(annotations_dir, f"{image_id}.json")
 
 
-def list_images(images_dir: Path) -> list[dict[str, str]]:
+def path_has_images(path: Path) -> bool:
+    return any(item.is_file() and item.suffix.lower() in IMAGE_EXTENSIONS for item in path.rglob("*"))
+
+
+def list_sessions(images_dir: Path) -> list[dict[str, str | int]]:
+    sessions = []
+    for path in sorted(images_dir.iterdir() if images_dir.exists() else []):
+        if not path.is_dir() or not path_has_images(path):
+            continue
+        session_id = path.name
+        sessions.append(
+            {
+                "id": session_id,
+                "name": session_id,
+                "image_count": len(list_images(images_dir, session_id=session_id)),
+            }
+        )
+
+    if not sessions and path_has_images(images_dir):
+        sessions.append(
+            {
+                "id": "",
+                "name": images_dir.name,
+                "image_count": len(list_images(images_dir)),
+            }
+        )
+    return sessions
+
+
+def session_images_dir(images_dir: Path, session_id: str | None) -> Path:
+    if session_id:
+        return safe_relative_path(images_dir, session_id)
+    return images_dir.resolve()
+
+
+def image_id_for(*, session_id: str | None, image_path: Path, root: Path) -> str:
+    relative_path = image_path.relative_to(root).as_posix()
+    if session_id:
+        return f"{session_id}/{relative_path}"
+    return relative_path
+
+
+def list_images(images_dir: Path, *, session_id: str | None = None) -> list[dict[str, str]]:
     images = []
-    for path in sorted(images_dir.rglob("*")):
+    root = session_images_dir(images_dir, session_id)
+    for path in sorted(root.rglob("*")):
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
-            image_id = path.relative_to(images_dir).as_posix()
+            image_id = image_id_for(session_id=session_id, image_path=path, root=root)
             images.append(
                 {
                     "id": image_id,
                     "name": path.name,
-                    "path": image_id,
+                    "path": path.relative_to(root).as_posix(),
                     "url": f"/images/{image_id}",
                 }
             )
     return images
 
 
-def empty_annotation(*, config: WorkbenchConfig, image_id: str, width: int, height: int) -> ImageAnnotation:
-    return ImageAnnotation(
-        image_id=image_id,
-        session_id=config.session_id,
-        file=image_id,
-        width=width,
-        height=height,
-        objects=(),
-    )
+def session_id_from_image_id(config: WorkbenchConfig, image_id: str) -> str:
+    if config.session_id:
+        return config.session_id
+    parts = image_id.split("/", maxsplit=1)
+    if len(parts) == 2:
+        return parts[0]
+    return config.images_dir.name or "manual_session"
 
 
 def annotation_from_payload(config: WorkbenchConfig, payload: dict) -> ImageAnnotation:
@@ -107,7 +148,7 @@ def annotation_from_payload(config: WorkbenchConfig, payload: dict) -> ImageAnno
         )
     return ImageAnnotation(
         image_id=image_id,
-        session_id=config.session_id,
+        session_id=session_id_from_image_id(config, image_id),
         file=image_id,
         width=width,
         height=height,
@@ -135,8 +176,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "image_extensions": sorted(IMAGE_EXTENSIONS),
                     }
                 )
+            elif parsed.path == "/api/sessions":
+                self.send_json({"sessions": list_sessions(self.config.images_dir)})
             elif parsed.path == "/api/images":
-                self.send_json({"images": list_images(self.config.images_dir)})
+                query = parse_qs(parsed.query)
+                session_id = query.get("session", [self.config.session_id or ""])[0] or None
+                self.send_json({"images": list_images(self.config.images_dir, session_id=session_id)})
             elif parsed.path == "/api/annotation":
                 query = parse_qs(parsed.query)
                 image_id = query.get("image", [""])[0]
@@ -233,7 +278,11 @@ def run_server(config: WorkbenchConfig, *, open_browser: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the Container ID annotation workbench.")
-    parser.add_argument("--images-dir", default="data/raw", help="Folder containing images to label.")
+    parser.add_argument(
+        "--images-dir",
+        default="data/frames",
+        help="Frames root or a single image-session folder to label.",
+    )
     parser.add_argument(
         "--annotations-dir",
         default="data/annotations/manual",
@@ -242,7 +291,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--session-id",
         default=None,
-        help="Capture/session id stored in annotations. Defaults to the image folder name.",
+        help="Optional: force a single capture/session id instead of selecting sessions in the UI.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Use 0.0.0.0 on a remote server.")
     parser.add_argument("--port", type=int, default=7860)
@@ -253,11 +302,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     images_dir = Path(args.images_dir).resolve()
-    session_id = args.session_id or images_dir.name or "manual_session"
     config = WorkbenchConfig(
         images_dir=images_dir,
         annotations_dir=Path(args.annotations_dir).resolve(),
-        session_id=session_id,
+        session_id=args.session_id,
         host=args.host,
         port=args.port,
     )
@@ -284,6 +332,8 @@ INDEX_HTML = r"""<!doctype html>
     button:hover { background: #1f2733; }
     .image-item { width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .image-item.active { outline: 2px solid #5aa9ff; }
+    .session-item { width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-item.active { outline: 2px solid #8ee59b; }
     .stage { display: grid; place-items: center; padding: 20px; overflow: auto; }
     .canvas-wrap { position: relative; width: fit-content; height: fit-content; }
     canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
@@ -308,6 +358,9 @@ INDEX_HTML = r"""<!doctype html>
         <button id="refresh">Refresh</button>
       </div>
       <p class="muted" id="configInfo">Loading folder…</p>
+      <h3>Sessions</h3>
+      <div id="sessionList"></div>
+      <h3>Images</h3>
       <p class="muted" id="imageCount">Loading images…</p>
       <div id="imageList"></div>
     </aside>
@@ -329,6 +382,7 @@ INDEX_HTML = r"""<!doctype html>
   </main>
 <script>
 const imageList = document.getElementById("imageList");
+const sessionList = document.getElementById("sessionList");
 const imageCount = document.getElementById("imageCount");
 const configInfo = document.getElementById("configInfo");
 const photo = document.getElementById("photo");
@@ -338,6 +392,8 @@ const boxList = document.getElementById("boxList");
 const statusEl = document.getElementById("status");
 
 let images = [];
+let sessions = [];
+let activeSession = null;
 let activeImage = null;
 let boxes = [];
 let drawing = null;
@@ -348,6 +404,8 @@ async function loadConfig() {
   configInfo.innerHTML = `
     Reading images from:<br>
     <code>${config.images_dir}</code><br><br>
+    Saving annotations to:<br>
+    <code>${config.annotations_dir}</code><br><br>
     Supported: ${config.image_extensions.join(", ")}
   `;
 }
@@ -358,8 +416,44 @@ function setStatus(message, good = true) {
   if (message) setTimeout(() => { statusEl.textContent = ""; }, 2800);
 }
 
+async function loadSessions() {
+  const response = await fetch("/api/sessions");
+  const data = await response.json();
+  sessions = data.sessions || [];
+  if (!activeSession && sessions.length) activeSession = sessions[0].id;
+  renderSessionList();
+  await loadImages();
+}
+
+function renderSessionList() {
+  sessionList.innerHTML = "";
+  if (!sessions.length) {
+    sessionList.innerHTML = `<p class="muted">No image sessions found.</p>`;
+    return;
+  }
+  for (const session of sessions) {
+    const button = document.createElement("button");
+    button.className = "session-item" + (activeSession === session.id ? " active" : "");
+    button.textContent = `${session.name} (${session.image_count})`;
+    button.title = session.name;
+    button.onclick = () => selectSession(session.id);
+    sessionList.appendChild(button);
+  }
+}
+
+async function selectSession(sessionId) {
+  activeSession = sessionId;
+  activeImage = null;
+  boxes = [];
+  photo.removeAttribute("src");
+  renderAll();
+  renderSessionList();
+  await loadImages();
+}
+
 async function loadImages() {
-  const response = await fetch("/api/images");
+  const sessionQuery = activeSession === null ? "" : `?session=${encodeURIComponent(activeSession)}`;
+  const response = await fetch(`/api/images${sessionQuery}`);
   const data = await response.json();
   images = data.images || [];
   imageCount.textContent = `${images.length} image(s)`;
@@ -369,8 +463,8 @@ async function loadImages() {
     photo.removeAttribute("src");
     imageList.innerHTML = `
       <p class="muted">
-        No images found. If this folder contains MP4 videos, extract frames first,
-        then launch the UI with <code>--images-dir data/frames/session_name</code>.
+        No images found in this session. If this folder contains MP4 videos,
+        extract frames first, then launch the UI with <code>--images-dir data/frames</code>.
       </p>
     `;
   }
@@ -517,7 +611,7 @@ canvas.addEventListener("mouseup", () => {
 
 document.getElementById("undo").onclick = () => { boxes.pop(); renderAll(); };
 document.getElementById("clear").onclick = () => { boxes = []; renderAll(); };
-document.getElementById("refresh").onclick = loadImages;
+document.getElementById("refresh").onclick = loadSessions;
 document.getElementById("save").onclick = async () => {
   if (!activeImage) return;
   const payload = {
@@ -544,7 +638,7 @@ window.addEventListener("resize", () => {
 });
 
 loadConfig().catch(error => setStatus(error.message, false));
-loadImages().catch(error => setStatus(error.message, false));
+loadSessions().catch(error => setStatus(error.message, false));
 </script>
 </body>
 </html>

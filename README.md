@@ -71,8 +71,8 @@ Launch the annotation UI:
 
 ```bash
 python apps/workbench/app.py \
-  --images-dir data/frames/session_001 \
-  --annotations-dir data/annotations/manual/session_001 \
+  --images-dir data/frames \
+  --annotations-dir data/annotations/manual \
   --host 0.0.0.0 \
   --port 7860
 ```

@@ -19,8 +19,8 @@ The first UI is dependency-free and runs with Python only:
 
 ```bash
 python apps/workbench/app.py \
-  --images-dir data/frames/session_001 \
-  --annotations-dir data/annotations/manual/session_001 \
+  --images-dir data/frames \
+  --annotations-dir data/annotations/manual \
   --host 0.0.0.0 \
   --port 7860
 ```
@@ -53,19 +53,19 @@ python scripts/extract_video_frames.py \
   --fps 1
 ```
 
-Then launch the UI pointing to the extracted frames:
+Then launch the UI pointing to the frames root. The UI will show
+`session_001`, `session_002`, and other frame folders as selectable sessions:
 
 ```bash
 python apps/workbench/app.py \
-  --images-dir data/frames/session_001 \
-  --annotations-dir data/annotations/manual/session_001 \
-  --session-id session_001 \
+  --images-dir data/frames \
+  --annotations-dir data/annotations/manual \
   --host 0.0.0.0 \
   --port 7860
 ```
 
-There is no folder picker in this first UI. Choose the folder by changing
-`--images-dir` when starting the server.
+There is no filesystem folder picker in this first UI. Choose the root folder
+by changing `--images-dir` when starting the server.
 
 Example output:
 

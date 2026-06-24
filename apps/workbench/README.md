@@ -48,8 +48,8 @@ The annotation UI labels images, not videos directly. If your raw session is an
 
 ```bash
 python scripts/extract_video_frames.py \
-  --input data/raw/session_001 \
-  --output data/frames/session_001 \
+  --input data/raw \
+  --output data/frames \
   --fps 1
 ```
 

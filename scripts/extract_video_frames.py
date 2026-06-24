@@ -5,8 +5,8 @@ video formats and avoids adding Python package dependencies to the project.
 
 Example:
     python scripts/extract_video_frames.py \
-      --input data/raw/session_001 \
-      --output data/frames/session_001 \
+      --input data/raw \
+      --output data/frames \
       --fps 1
 """
 
@@ -33,6 +33,20 @@ def find_videos(path: Path) -> list[Path]:
 def frame_pattern_for(output_dir: Path, video_path: Path) -> Path:
     stem = video_path.stem.replace(" ", "_")
     return output_dir / f"{stem}_frame_%06d.jpg"
+
+
+def output_dir_for_video(*, input_path: Path, output_root: Path, video_path: Path) -> Path:
+    """Return the output folder for a video while preserving session folders.
+
+    If `input_path` is a sessions root like `data/raw`, a video under
+    `data/raw/session_002/example.mp4` is written to `data/frames/session_002`.
+
+    If `input_path` is already one session folder like `data/raw/session_002`,
+    frames are written directly to the provided output folder.
+    """
+    if input_path.is_file() or video_path.parent == input_path:
+        return output_root
+    return output_root / video_path.parent.relative_to(input_path)
 
 
 def build_ffmpeg_command(video_path: Path, output_pattern: Path, fps: float, quality: int) -> list[str]:
@@ -96,9 +110,14 @@ def main() -> None:
     print(f"Found {len(videos)} video(s). Extracting to {output_dir}")
     total = 0
     for video_path in videos:
-        count = extract_video(video_path, output_dir, fps=args.fps, quality=args.quality)
+        video_output_dir = output_dir_for_video(
+            input_path=input_path,
+            output_root=output_dir,
+            video_path=video_path,
+        )
+        count = extract_video(video_path, video_output_dir, fps=args.fps, quality=args.quality)
         total += count
-        print(f"{video_path.name}: {count} new frame(s)")
+        print(f"{video_path.name}: {count} new frame(s) -> {video_output_dir}")
     print(f"Done. Extracted {total} new frame(s).")
 
 

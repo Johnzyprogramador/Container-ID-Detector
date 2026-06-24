@@ -1,6 +1,6 @@
 # Workbench
 
-This folder will contain the browser UI for:
+This folder contains the browser UI for:
 
 1. importing and browsing capture sessions;
 2. drawing boxes and entering transcriptions;
@@ -13,7 +13,40 @@ This folder will contain the browser UI for:
 The workbench must call functions from `container_vision`. Dataset, training,
 and inference logic should remain usable without the UI.
 
-The first UI should favor a small Gradio application. A separate frontend/API
-architecture can be introduced later if deployment or team boundaries require
-it.
+## First annotation UI
 
+The first UI is dependency-free and runs with Python only:
+
+```bash
+python apps/workbench/app.py \
+  --images-dir data/raw/session_001 \
+  --annotations-dir data/annotations/manual/session_001 \
+  --host 0.0.0.0 \
+  --port 7860
+```
+
+Then open:
+
+```text
+http://REMOTE_MACHINE_IP:7860
+```
+
+If you are running locally on the same machine, use:
+
+```text
+http://127.0.0.1:7860
+```
+
+Draw one box around each visible painted number, type the digits inside that
+box, and press **Save**. The UI writes one JSON annotation per image using the
+canonical project schema.
+
+Example output:
+
+```text
+data/annotations/manual/session_001/truck_001.jpg.json
+```
+
+This is deliberately simple. Later workbench milestones can add prediction
+overlays, YOLO export buttons, OCR review, video playback, and live camera
+streams.

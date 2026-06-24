@@ -60,12 +60,22 @@ corrections remain separate. See [docs/data-format.md](docs/data-format.md).
 
 ## Development
 
-The foundation uses Python 3.11+ and has no runtime dependencies yet:
+The foundation uses Python 3.11+ and the first annotation workbench has no
+runtime dependencies:
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Model and UI dependencies will be introduced as optional groups when those
-features are implemented.
+Launch the annotation UI:
 
+```bash
+python apps/workbench/app.py \
+  --images-dir data/raw/session_001 \
+  --annotations-dir data/annotations/manual/session_001 \
+  --host 0.0.0.0 \
+  --port 7860
+```
+
+Model dependencies will be introduced as optional groups when training and
+inference features are implemented.

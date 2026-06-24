@@ -14,12 +14,10 @@ dependencies = []
 dev = ["pytest>=8", "ruff>=0.5"]
 detection = ["ultralytics>=8.3", "opencv-python>=4.9"]
 recognition = ["easyocr>=1.7", "opencv-python>=4.9"]
-ui = ["gradio>=5"]
 all = [
   "ultralytics>=8.3",
   "easyocr>=1.7",
   "opencv-python>=4.9",
-  "gradio>=5",
 ]
 
 [tool.setuptools.packages.find]
@@ -31,4 +29,3 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-

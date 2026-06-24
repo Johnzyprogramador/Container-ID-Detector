@@ -19,7 +19,7 @@ The first UI is dependency-free and runs with Python only:
 
 ```bash
 python apps/workbench/app.py \
-  --images-dir data/raw/session_001 \
+  --images-dir data/frames/session_001 \
   --annotations-dir data/annotations/manual/session_001 \
   --host 0.0.0.0 \
   --port 7860
@@ -40,6 +40,32 @@ http://127.0.0.1:7860
 Draw one box around each visible painted number, type the digits inside that
 box, and press **Save**. The UI writes one JSON annotation per image using the
 canonical project schema.
+
+## Video sessions
+
+The annotation UI labels images, not videos directly. If your raw session is an
+`.mp4`, extract frames first:
+
+```bash
+python scripts/extract_video_frames.py \
+  --input data/raw/session_001 \
+  --output data/frames/session_001 \
+  --fps 1
+```
+
+Then launch the UI pointing to the extracted frames:
+
+```bash
+python apps/workbench/app.py \
+  --images-dir data/frames/session_001 \
+  --annotations-dir data/annotations/manual/session_001 \
+  --session-id session_001 \
+  --host 0.0.0.0 \
+  --port 7860
+```
+
+There is no folder picker in this first UI. Choose the folder by changing
+`--images-dir` when starting the server.
 
 Example output:
 

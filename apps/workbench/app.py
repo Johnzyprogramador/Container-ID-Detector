@@ -126,6 +126,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
+            elif parsed.path == "/api/config":
+                self.send_json(
+                    {
+                        "images_dir": str(self.config.images_dir),
+                        "annotations_dir": str(self.config.annotations_dir),
+                        "session_id": self.config.session_id,
+                        "image_extensions": sorted(IMAGE_EXTENSIONS),
+                    }
+                )
             elif parsed.path == "/api/images":
                 self.send_json({"images": list_images(self.config.images_dir)})
             elif parsed.path == "/api/annotation":
@@ -298,6 +307,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="toolbar">
         <button id="refresh">Refresh</button>
       </div>
+      <p class="muted" id="configInfo">Loading folder…</p>
       <p class="muted" id="imageCount">Loading images…</p>
       <div id="imageList"></div>
     </aside>
@@ -320,6 +330,7 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const imageList = document.getElementById("imageList");
 const imageCount = document.getElementById("imageCount");
+const configInfo = document.getElementById("configInfo");
 const photo = document.getElementById("photo");
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
@@ -330,6 +341,16 @@ let images = [];
 let activeImage = null;
 let boxes = [];
 let drawing = null;
+
+async function loadConfig() {
+  const response = await fetch("/api/config");
+  const config = await response.json();
+  configInfo.innerHTML = `
+    Reading images from:<br>
+    <code>${config.images_dir}</code><br><br>
+    Supported: ${config.image_extensions.join(", ")}
+  `;
+}
 
 function setStatus(message, good = true) {
   statusEl.textContent = message;
@@ -344,6 +365,15 @@ async function loadImages() {
   imageCount.textContent = `${images.length} image(s)`;
   renderImageList();
   if (!activeImage && images.length) selectImage(images[0].id);
+  if (!images.length) {
+    photo.removeAttribute("src");
+    imageList.innerHTML = `
+      <p class="muted">
+        No images found. If this folder contains MP4 videos, extract frames first,
+        then launch the UI with <code>--images-dir data/frames/session_name</code>.
+      </p>
+    `;
+  }
 }
 
 function renderImageList() {
@@ -513,6 +543,7 @@ window.addEventListener("resize", () => {
   }
 });
 
+loadConfig().catch(error => setStatus(error.message, false));
 loadImages().catch(error => setStatus(error.message, false));
 </script>
 </body>

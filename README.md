@@ -71,10 +71,19 @@ Launch the annotation UI:
 
 ```bash
 python apps/workbench/app.py \
-  --images-dir data/raw/session_001 \
+  --images-dir data/frames/session_001 \
   --annotations-dir data/annotations/manual/session_001 \
   --host 0.0.0.0 \
   --port 7860
+```
+
+If your session starts as a video, extract frames first:
+
+```bash
+python scripts/extract_video_frames.py \
+  --input data/raw/session_001 \
+  --output data/frames/session_001 \
+  --fps 1
 ```
 
 Model dependencies will be introduced as optional groups when training and

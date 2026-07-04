@@ -14,6 +14,8 @@ from typing import Any
 
 SCHEMA_VERSION = "1.0"
 PAINTED_NUMBER_CLASS = "painted_number"
+LICENSE_PLATE_CLASS = "license_plate"
+DETECTION_CLASSES = (PAINTED_NUMBER_CLASS, LICENSE_PLATE_CLASS)
 
 
 class ReviewStatus(StrEnum):
@@ -76,14 +78,16 @@ class AnnotationObject:
     def validate(self, *, image_width: int, image_height: int) -> None:
         if not self.object_id.strip():
             raise ValueError("object_id cannot be empty")
-        if self.class_name != PAINTED_NUMBER_CLASS:
-            raise ValueError(f"class_name must be {PAINTED_NUMBER_CLASS!r}")
+        if self.class_name not in DETECTION_CLASSES:
+            raise ValueError(f"class_name must be one of {DETECTION_CLASSES!r}")
         self.bbox.validate(image_width=image_width, image_height=image_height)
         if self.readable:
             if not self.transcription:
                 raise ValueError("Readable objects require a transcription")
-            if not self.transcription.isdigit():
-                raise ValueError("Transcription must contain digits only")
+            if self.class_name == PAINTED_NUMBER_CLASS and not self.transcription.isdigit():
+                raise ValueError("Painted-number transcription must contain digits only")
+            if self.class_name == LICENSE_PLATE_CLASS and not self.transcription.isalnum():
+                raise ValueError("License-plate transcription must contain letters and digits only")
         elif self.transcription:
             raise ValueError("Unreadable objects cannot have a transcription")
 
@@ -196,4 +200,3 @@ class Session:
         session = cls(**value)
         session.validate()
         return session
-

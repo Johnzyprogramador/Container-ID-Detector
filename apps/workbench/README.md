@@ -37,9 +37,10 @@ If you are running locally on the same machine, use:
 http://127.0.0.1:7860
 ```
 
-Draw one box around each visible painted number, type the digits inside that
-box, and press **Save**. The UI writes one JSON annotation per image using the
-canonical project schema.
+Choose `painted_number` or `license_plate`, draw one box around each visible
+identifier, enter its text, and press **Save**. Existing annotations without an
+explicit class continue to load as `painted_number`. The UI writes one JSON
+annotation per image using the canonical project schema.
 
 ## Video sessions
 

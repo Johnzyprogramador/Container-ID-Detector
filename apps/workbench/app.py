@@ -30,6 +30,7 @@ if str(SRC_DIR) not in sys.path:
 from container_vision.data import (  # noqa: E402
     AnnotationObject,
     BoundingBox,
+    DETECTION_CLASSES,
     ImageAnnotation,
     PAINTED_NUMBER_CLASS,
 )
@@ -139,7 +140,7 @@ def annotation_from_payload(config: WorkbenchConfig, payload: dict) -> ImageAnno
         objects.append(
             AnnotationObject(
                 object_id=str(raw_object.get("object_id") or f"box_{index:03d}"),
-                class_name=PAINTED_NUMBER_CLASS,
+                class_name=str(raw_object.get("class_name", PAINTED_NUMBER_CLASS)),
                 bbox=BoundingBox.from_xyxy(raw_object["bbox_xyxy"]),
                 transcription=transcription if readable else None,
                 readable=readable,
@@ -174,6 +175,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "annotations_dir": str(self.config.annotations_dir),
                         "session_id": self.config.session_id,
                         "image_extensions": sorted(IMAGE_EXTENSIONS),
+                        "detection_classes": list(DETECTION_CLASSES),
                     }
                 )
             elif parsed.path == "/api/sessions":
@@ -349,7 +351,7 @@ INDEX_HTML = r"""<!doctype html>
 <body>
   <header>
     <h1>Container ID Workbench</h1>
-    <span class="muted">Draw boxes around painted numbers, type the digits, save JSON.</span>
+    <span class="muted">Label painted numbers and license plates, enter their text, save JSON.</span>
     <span id="status"></span>
   </header>
   <main>
@@ -376,7 +378,12 @@ INDEX_HTML = r"""<!doctype html>
         <button id="undo">Undo box</button>
         <button id="clear">Clear</button>
       </div>
-      <p class="muted">Tip: drag on the image to create a box. Use one box per visible number.</p>
+      <label class="muted" for="newBoxClass">Class for new boxes</label>
+      <select id="newBoxClass">
+        <option value="painted_number">painted_number</option>
+        <option value="license_plate">license_plate</option>
+      </select>
+      <p class="muted">Tip: choose a class, then drag on the image. Use one box per visible identifier.</p>
       <div id="boxList"></div>
     </aside>
   </main>
@@ -390,6 +397,7 @@ const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 const boxList = document.getElementById("boxList");
 const statusEl = document.getElementById("status");
+const newBoxClass = document.getElementById("newBoxClass");
 
 let images = [];
 let sessions = [];
@@ -408,6 +416,11 @@ async function loadConfig() {
     <code>${config.annotations_dir}</code><br><br>
     Supported: ${config.image_extensions.join(", ")}
   `;
+  if (config.detection_classes) {
+    newBoxClass.innerHTML = config.detection_classes
+      .map(name => `<option value="${name}">${name}</option>`)
+      .join("");
+  }
 }
 
 function setStatus(message, good = true) {
@@ -493,6 +506,7 @@ async function selectImage(imageId) {
   const annotation = await response.json();
   boxes = (annotation.objects || []).map((object, index) => ({
     object_id: object.object_id || `box_${String(index + 1).padStart(3, "0")}`,
+    class_name: object.class_name || "painted_number",
     bbox_xyxy: object.bbox_xyxy,
     transcription: object.transcription || "",
     readable: object.readable !== false,
@@ -529,14 +543,15 @@ function draw() {
   boxes.forEach((box, index) => {
     const [x1, y1] = imageToDisplay(box.bbox_xyxy[0], box.bbox_xyxy[1]);
     const [x2, y2] = imageToDisplay(box.bbox_xyxy[2], box.bbox_xyxy[3]);
-    ctx.strokeStyle = "#61dafb";
-    ctx.fillStyle = "rgba(97,218,251,0.12)";
+    const isPlate = box.class_name === "license_plate";
+    ctx.strokeStyle = isPlate ? "#ffb45e" : "#61dafb";
+    ctx.fillStyle = isPlate ? "rgba(255,180,94,0.12)" : "rgba(97,218,251,0.12)";
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
     ctx.fillStyle = "#101318";
-    ctx.fillRect(x1, Math.max(0, y1 - 20), 72, 20);
+    ctx.fillRect(x1, Math.max(0, y1 - 20), 190, 20);
     ctx.fillStyle = "#eef2f7";
-    ctx.fillText(`${index + 1}: ${box.transcription || "?"}`, x1 + 4, Math.max(14, y1 - 5));
+    ctx.fillText(`${index + 1}: ${box.class_name} ${box.transcription || "?"}`, x1 + 4, Math.max(14, y1 - 5));
   });
   if (drawing) {
     ctx.strokeStyle = "#ffcc66";
@@ -551,16 +566,31 @@ function renderBoxes() {
     row.className = "box-row";
     row.innerHTML = `
       <strong>Box ${index + 1}</strong>
-      <label>Digits inside the box</label>
-      <input type="text" inputmode="numeric" pattern="[0-9]*" value="${box.transcription}" />
+      <label>Detection class</label>
+      <select class="class-name">
+        <option value="painted_number" ${box.class_name === "painted_number" ? "selected" : ""}>painted_number</option>
+        <option value="license_plate" ${box.class_name === "license_plate" ? "selected" : ""}>license_plate</option>
+      </select>
+      <label>Text inside the box</label>
+      <input type="text" value="${box.transcription}" />
       <label><input type="checkbox" class="readable" ${box.readable ? "checked" : ""}/> readable</label>
       <label><input type="checkbox" class="occluded" ${box.occluded ? "checked" : ""}/> occluded</label>
       <p class="muted">bbox: [${box.bbox_xyxy.join(", ")}]</p>
     `;
     row.querySelector("input[type=text]").oninput = event => {
-      box.transcription = event.target.value.replace(/\D/g, "");
+      const raw = event.target.value.toUpperCase();
+      box.transcription = box.class_name === "license_plate"
+        ? raw.replace(/[^A-Z0-9]/g, "")
+        : raw.replace(/\D/g, "");
       event.target.value = box.transcription;
       draw();
+    };
+    row.querySelector(".class-name").onchange = event => {
+      box.class_name = event.target.value;
+      box.transcription = box.class_name === "license_plate"
+        ? box.transcription.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : box.transcription.replace(/\D/g, "");
+      renderAll();
     };
     row.querySelector(".readable").onchange = event => { box.readable = event.target.checked; };
     row.querySelector(".occluded").onchange = event => { box.occluded = event.target.checked; };
@@ -601,6 +631,7 @@ canvas.addEventListener("mouseup", () => {
   const [x2, y2] = displayToImage(x2d, y2d);
   boxes.push({
     object_id: `box_${String(boxes.length + 1).padStart(3, "0")}`,
+    class_name: newBoxClass.value,
     bbox_xyxy: [x1, y1, x2, y2],
     transcription: "",
     readable: true,

@@ -93,7 +93,38 @@ class WorkbenchTests(unittest.TestCase):
         )
 
         self.assertEqual(annotation.session_id, "session_001")
+        self.assertEqual(annotation.objects[0].class_name, "painted_number")
         self.assertEqual(annotation.objects[0].transcription, "274")
+
+    def test_payload_preserves_license_plate_class(self) -> None:
+        config = WorkbenchConfig(
+            images_dir=Path("data/frames"),
+            annotations_dir=Path("data/annotations"),
+            session_id=None,
+            host="127.0.0.1",
+            port=7860,
+        )
+
+        annotation = annotation_from_payload(
+            config,
+            {
+                "image_id": "session_plate/car.jpg",
+                "width": 100,
+                "height": 80,
+                "objects": [
+                    {
+                        "class_name": "license_plate",
+                        "bbox_xyxy": [10, 20, 70, 50],
+                        "transcription": "12AB34",
+                        "readable": True,
+                    }
+                ],
+            },
+        )
+
+        annotation.validate()
+        self.assertEqual(annotation.objects[0].class_name, "license_plate")
+        self.assertEqual(annotation.objects[0].transcription, "12AB34")
 
     def test_forced_session_id_overrides_image_path_session(self) -> None:
         config = WorkbenchConfig(

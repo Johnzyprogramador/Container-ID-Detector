@@ -9,6 +9,7 @@ from container_vision.data import (
     AnnotationObject,
     BoundingBox,
     ImageAnnotation,
+    LICENSE_PLATE_CLASS,
     ReviewStatus,
     Session,
 )
@@ -74,6 +75,25 @@ class AnnotationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             annotation.validate()
 
+    def test_license_plate_allows_letters_and_digits(self) -> None:
+        annotation = ImageAnnotation(
+            image_id="plate_image",
+            session_id="session",
+            file="plate.jpg",
+            width=100,
+            height=100,
+            objects=(
+                AnnotationObject(
+                    object_id="plate",
+                    class_name=LICENSE_PLATE_CLASS,
+                    bbox=BoundingBox(1, 1, 80, 40),
+                    transcription="12AB34",
+                    readable=True,
+                ),
+            ),
+        )
+        annotation.validate()
+
     def test_verified_negative_is_valid(self) -> None:
         annotation = ImageAnnotation(
             image_id="negative",
@@ -100,4 +120,3 @@ class SessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

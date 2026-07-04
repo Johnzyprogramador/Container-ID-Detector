@@ -126,17 +126,14 @@ preserving those folders, and writes aggregate counts to `summary.json`.
 
 ## Add OCR to the detected crops
 
-Install PaddleOCR and one PaddlePaddle inference engine. For CPU:
+EasyOCR shares PyTorch and CUDA with YOLO, avoiding conflicts between separate
+deep-learning runtimes:
 
 ```bash
-pip install -e '.[recognition]'
-pip install paddlepaddle==3.3.0 \
-  -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+pip install -e '.[detection,recognition]'
 ```
 
-For an NVIDIA GPU, install the official PaddlePaddle wheel matching the
-machine's supported CUDA package index (for example `cu118` or `cu126`) instead
-of the CPU wheel. Then run the combined pipeline:
+Then run the combined pipeline:
 
 ```bash
 python scripts/predict_yolo_ocr.py \
@@ -148,9 +145,8 @@ python scripts/predict_yolo_ocr.py \
   --ocr-batch 8
 ```
 
-The first run downloads `en_PP-OCRv5_mobile_rec`. Set
-`PADDLE_PDX_MODEL_SOURCE=BOS` if the machine cannot access Hugging Face. To view
-the generated OCR videos in the workbench, launch it with
+The first run downloads EasyOCR's English recognition weights. To view the
+generated OCR videos in the workbench, launch it with
 `--predictions-dir outputs/ocr_predictions`.
 
 The exported release contains copied images, YOLO labels, `data.yaml`, and a

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run YOLO and batched PaddleOCR over local videos with stage timings."""
+"""Run YOLO and batched EasyOCR over local videos with stage timings."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from container_vision.recognition import PaddleTextRecognizer  # noqa: E402
+from container_vision.recognition import EasyTextRecognizer  # noqa: E402
 from scripts.predict_yolo import (  # noqa: E402
     VIDEO_EXTENSIONS,
     build_browser_transcode_command,
@@ -135,13 +135,12 @@ def process_video(model, recognizer, source: Path, destination: Path, args) -> d
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Visualize YOLO plus PaddleOCR predictions.")
+    parser = argparse.ArgumentParser(description="Visualize YOLO plus EasyOCR predictions.")
     parser.add_argument("--weights", required=True)
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", default=str(REPO_ROOT / "outputs" / "ocr_predictions"))
     parser.add_argument("--yolo-device", default="0")
-    parser.add_argument("--ocr-device", default="gpu:0", help="Paddle device: gpu:0 or cpu")
-    parser.add_argument("--ocr-model", default="en_PP-OCRv5_mobile_rec")
+    parser.add_argument("--ocr-device", default="gpu:0", help="OCR device: gpu:0 or cpu")
     parser.add_argument("--ocr-batch", type=int, default=8)
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--image-size", type=int, default=640)
@@ -158,9 +157,7 @@ def main() -> None:
     if not media:
         raise SystemExit(f"No videos found under: {source}")
     model = YOLO(str(Path(args.weights).resolve()))
-    recognizer = PaddleTextRecognizer(
-        device=args.ocr_device, model_name=args.ocr_model, batch_size=args.ocr_batch
-    )
+    recognizer = EasyTextRecognizer(device=args.ocr_device, batch_size=args.ocr_batch)
     summaries = []
     for index, media_path in enumerate(media, start=1):
         destination = output_path_for(source, media_path, output)

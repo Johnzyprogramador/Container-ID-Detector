@@ -568,7 +568,10 @@ INDEX_HTML = r"""<!doctype html>
   </main>
   <main id="benchmarkView" class="hidden">
     <aside class="benchmark-sidebar">
-      <div class="toolbar"><button id="refreshBenchmarks">Refresh benchmarks</button></div>
+      <div class="toolbar">
+        <button id="refreshBenchmarks">Refresh benchmarks</button>
+        <button id="toggleBenchmarkPolling">Pause live updates</button>
+      </div>
       <p class="muted" id="benchmarkFolder">Loading benchmark folder…</p>
       <div id="benchmarkList"></div>
     </aside>
@@ -602,6 +605,8 @@ const benchmarkTitle = document.getElementById("benchmarkTitle");
 const benchmarkStatus = document.getElementById("benchmarkStatus");
 const benchmarkRuns = document.getElementById("benchmarkRuns");
 const comparisonPlots = document.getElementById("comparisonPlots");
+const benchmarkContent = document.querySelector(".benchmark-content");
+const toggleBenchmarkPolling = document.getElementById("toggleBenchmarkPolling");
 
 let images = [];
 let sessions = [];
@@ -614,6 +619,7 @@ let activePrediction = null;
 let benchmarkMatrices = [];
 let activeBenchmark = null;
 let benchmarkPoll = null;
+let benchmarkPollingEnabled = true;
 
 async function loadConfig() {
   const response = await fetch("/api/config");
@@ -641,8 +647,15 @@ function selectView(viewId) {
   if (benchmarkPoll) clearInterval(benchmarkPoll);
   if (viewId === "benchmarkView") {
     loadBenchmarks().catch(error => setStatus(error.message, false));
-    benchmarkPoll = setInterval(() => loadBenchmarks(true).catch(() => {}), 5000);
+    startBenchmarkPolling();
   }
+}
+
+function startBenchmarkPolling() {
+  if (benchmarkPoll) clearInterval(benchmarkPoll);
+  benchmarkPoll = null;
+  if (!benchmarkPollingEnabled) return;
+  benchmarkPoll = setInterval(() => loadBenchmarks(true).catch(() => {}), 5000);
 }
 
 async function loadBenchmarks(preserveSelection = false) {
@@ -652,6 +665,11 @@ async function loadBenchmarks(preserveSelection = false) {
   if ((!preserveSelection || !activeBenchmark) && benchmarkMatrices.length) activeBenchmark = benchmarkMatrices[0].id;
   renderBenchmarkList();
   renderBenchmarkDetails();
+  const selected = benchmarkMatrices.find(item => item.id === activeBenchmark);
+  if (selected?.matrix?.status === "complete" && benchmarkPoll) {
+    clearInterval(benchmarkPoll);
+    benchmarkPoll = null;
+  }
 }
 
 function renderBenchmarkList() {
@@ -681,6 +699,7 @@ function formatNumber(value, digits = 1) {
 function renderBenchmarkDetails() {
   const selected = benchmarkMatrices.find(item => item.id === activeBenchmark);
   if (!selected) return;
+  const previousScroll = benchmarkContent.scrollTop;
   benchmarkTitle.textContent = selected.id;
   benchmarkStatus.textContent = `Status: ${selected.matrix.status || "unknown"} · ${selected.runs.length} run folder(s)`;
   benchmarkRuns.innerHTML = "";
@@ -710,12 +729,13 @@ function renderBenchmarkDetails() {
         ${metricCard("GPU temperature", `${formatNumber(resource.gpu_temperature_c)} °C`)}
         ${metricCard("GPU power", `${formatNumber(resource.gpu_power_w)} W`)}
       </div>
-      <div class="plot-grid">${run.plots.map(url => `<img src="${url}?t=${Date.now()}" alt="Benchmark plot">`).join("")}</div>
+      <div class="plot-grid">${run.plots.map(url => `<img src="${url}" alt="Benchmark plot">`).join("")}</div>
     `;
     benchmarkRuns.appendChild(card);
   });
   comparisonPlots.innerHTML = selected.comparison_plots
-    .map(url => `<img src="${url}?t=${Date.now()}" alt="Comparison plot">`).join("");
+    .map(url => `<img src="${url}" alt="Comparison plot">`).join("");
+  benchmarkContent.scrollTop = previousScroll;
 }
 
 async function loadPredictions() {
@@ -983,6 +1003,11 @@ document.getElementById("clear").onclick = () => { boxes = []; renderAll(); };
 document.getElementById("refresh").onclick = loadSessions;
 document.getElementById("refreshPredictions").onclick = loadPredictions;
 document.getElementById("refreshBenchmarks").onclick = () => loadBenchmarks(true);
+toggleBenchmarkPolling.onclick = () => {
+  benchmarkPollingEnabled = !benchmarkPollingEnabled;
+  toggleBenchmarkPolling.textContent = benchmarkPollingEnabled ? "Pause live updates" : "Resume live updates";
+  startBenchmarkPolling();
+};
 document.querySelectorAll(".view-tab").forEach(tab => {
   tab.onclick = () => selectView(tab.dataset.view);
 });

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -33,12 +34,21 @@ def output_path_for(source_root: Path, media_path: Path, output_root: Path) -> P
     return output_root / relative
 
 
+def build_browser_transcode_command(source: Path, destination: Path) -> list[str]:
+    return [
+        "ffmpeg", "-y", "-loglevel", "error", "-i", str(source),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(destination),
+    ]
+
+
 def process_media(model, media_path: Path, destination: Path, args) -> dict:
     import cv2
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     is_video = media_path.suffix.lower() in VIDEO_EXTENSIONS
     writer = None
+    working_destination = destination.with_name(f".{destination.stem}.working.mp4") if is_video else destination
     frames = 0
     detections: Counter[str] = Counter()
 
@@ -62,7 +72,7 @@ def process_media(model, media_path: Path, destination: Path, args) -> dict:
         if is_video and writer is None:
             height, width = rendered.shape[:2]
             writer = cv2.VideoWriter(
-                str(destination),
+                str(working_destination),
                 cv2.VideoWriter_fourcc(*"mp4v"),
                 fps,
                 (width, height),
@@ -82,6 +92,15 @@ def process_media(model, media_path: Path, destination: Path, args) -> dict:
 
     if writer is not None:
         writer.release()
+        try:
+            subprocess.run(
+                build_browser_transcode_command(working_destination, destination),
+                check=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError("ffmpeg with H.264 support is required for browser video output") from exc
+        finally:
+            working_destination.unlink(missing_ok=True)
     return {
         "source": str(media_path),
         "output": str(destination),

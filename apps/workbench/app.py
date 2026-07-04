@@ -36,6 +36,7 @@ from container_vision.data import (  # noqa: E402
 )
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class WorkbenchConfig:
     session_id: str | None
     host: str
     port: int
+    predictions_dir: Path | None = None
 
 
 def safe_relative_path(root: Path, relative_path: str) -> Path:
@@ -120,6 +122,26 @@ def list_images(images_dir: Path, *, session_id: str | None = None) -> list[dict
     return images
 
 
+def list_prediction_videos(predictions_dir: Path) -> list[dict[str, str]]:
+    videos = []
+    if not predictions_dir.exists():
+        return videos
+    for path in sorted(predictions_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        relative = path.relative_to(predictions_dir).as_posix()
+        parts = Path(relative).parts
+        videos.append(
+            {
+                "id": relative,
+                "name": path.name,
+                "session": parts[0] if len(parts) > 1 else "predictions",
+                "url": f"/prediction-media/{relative}",
+            }
+        )
+    return videos
+
+
 def session_id_from_image_id(config: WorkbenchConfig, image_id: str) -> str:
     if config.session_id:
         return config.session_id
@@ -176,6 +198,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "session_id": self.config.session_id,
                         "image_extensions": sorted(IMAGE_EXTENSIONS),
                         "detection_classes": list(DETECTION_CLASSES),
+                        "predictions_dir": str(self.config.predictions_dir or ""),
                     }
                 )
             elif parsed.path == "/api/sessions":
@@ -184,12 +207,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 query = parse_qs(parsed.query)
                 session_id = query.get("session", [self.config.session_id or ""])[0] or None
                 self.send_json({"images": list_images(self.config.images_dir, session_id=session_id)})
+            elif parsed.path == "/api/predictions":
+                predictions_dir = self.config.predictions_dir or REPO_ROOT / "outputs" / "predictions"
+                self.send_json({"videos": list_prediction_videos(predictions_dir)})
             elif parsed.path == "/api/annotation":
                 query = parse_qs(parsed.query)
                 image_id = query.get("image", [""])[0]
                 self.handle_get_annotation(image_id)
             elif parsed.path.startswith("/images/"):
                 self.handle_get_image(parsed.path.removeprefix("/images/"))
+            elif parsed.path.startswith("/prediction-media/"):
+                self.handle_get_prediction(parsed.path.removeprefix("/prediction-media/"))
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
         except Exception as exc:  # pragma: no cover - safety net for UI errors
@@ -232,6 +260,48 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
+
+    def handle_get_prediction(self, relative_path: str) -> None:
+        predictions_dir = self.config.predictions_dir or REPO_ROOT / "outputs" / "predictions"
+        media_path = safe_relative_path(predictions_dir, relative_path)
+        if not media_path.is_file() or media_path.suffix.lower() not in VIDEO_EXTENSIONS:
+            self.send_error(HTTPStatus.NOT_FOUND, "Prediction video not found")
+            return
+        self.send_file(media_path)
+
+    def send_file(self, path: Path) -> None:
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        range_header = self.headers.get("Range")
+        status = HTTPStatus.OK
+        if range_header and range_header.startswith("bytes="):
+            requested = range_header.removeprefix("bytes=").split(",", maxsplit=1)[0]
+            start_text, end_text = requested.split("-", maxsplit=1)
+            start = int(start_text) if start_text else 0
+            end = int(end_text) if end_text else size - 1
+            end = min(end, size - 1)
+            if start < 0 or start > end:
+                self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                return
+            status = HTTPStatus.PARTIAL_CONTENT
+
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "video/mp4")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with path.open("rb") as stream:
+            stream.seek(start)
+            remaining = length
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def send_json(self, payload: dict, *, status: HTTPStatus = HTTPStatus.OK) -> None:
         self.send_text(json.dumps(payload), status=status, content_type="application/json")
@@ -297,6 +367,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="Use 0.0.0.0 on a remote server.")
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--predictions-dir",
+        default="outputs/predictions",
+        help="Folder containing YOLO prediction videos shown in the UI.",
+    )
     parser.add_argument("--open-browser", action="store_true", help="Open a local browser tab.")
     return parser.parse_args()
 
@@ -310,6 +385,7 @@ def main() -> None:
         session_id=args.session_id,
         host=args.host,
         port=args.port,
+        predictions_dir=Path(args.predictions_dir).resolve(),
     )
     run_server(config, open_browser=args.open_browser)
 
@@ -323,7 +399,7 @@ INDEX_HTML = r"""<!doctype html>
   <style>
     :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, sans-serif; }
     body { margin: 0; background: #101318; color: #eef2f7; }
-    header { padding: 14px 20px; border-bottom: 1px solid #293241; display: flex; gap: 16px; align-items: center; }
+    header { padding: 14px 20px; border-bottom: 1px solid #293241; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     header h1 { font-size: 18px; margin: 0; }
     main { display: grid; grid-template-columns: 280px 1fr 320px; height: calc(100vh - 58px); }
     aside, section { min-height: 0; overflow: auto; }
@@ -346,6 +422,15 @@ INDEX_HTML = r"""<!doctype html>
     .muted { color: #aab4c3; font-size: 13px; }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
     #status { color: #8ee59b; }
+    .view-tabs { display: flex; gap: 6px; margin-left: auto; }
+    .view-tab.active { outline: 2px solid #5aa9ff; }
+    .hidden { display: none !important; }
+    #predictionView { grid-template-columns: 320px 1fr; }
+    #predictionView .prediction-sidebar { border-right: 1px solid #293241; padding: 12px; overflow: auto; }
+    #predictionView .prediction-stage { display: grid; place-items: center; padding: 20px; min-width: 0; }
+    #predictionVideo { width: 100%; max-width: 1200px; max-height: calc(100vh - 140px); background: #000; }
+    .prediction-item { width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .prediction-item.active { outline: 2px solid #ffb45e; }
   </style>
 </head>
 <body>
@@ -353,8 +438,12 @@ INDEX_HTML = r"""<!doctype html>
     <h1>Container ID Workbench</h1>
     <span class="muted">Label painted numbers and license plates, enter their text, save JSON.</span>
     <span id="status"></span>
+    <nav class="view-tabs">
+      <button class="view-tab active" data-view="annotationView">Annotate</button>
+      <button class="view-tab" data-view="predictionView">YOLO predictions</button>
+    </nav>
   </header>
-  <main>
+  <main id="annotationView">
     <aside>
       <div class="toolbar">
         <button id="refresh">Refresh</button>
@@ -387,6 +476,23 @@ INDEX_HTML = r"""<!doctype html>
       <div id="boxList"></div>
     </aside>
   </main>
+  <main id="predictionView" class="hidden">
+    <aside class="prediction-sidebar">
+      <div class="toolbar">
+        <button id="refreshPredictions">Refresh predictions</button>
+      </div>
+      <p class="muted" id="predictionFolder">Loading prediction folder…</p>
+      <p class="muted" id="predictionCount"></p>
+      <div id="predictionList"></div>
+    </aside>
+    <section class="prediction-stage">
+      <div>
+        <h3 id="predictionTitle">Select a prediction video</h3>
+        <video id="predictionVideo" controls playsinline preload="metadata"></video>
+        <p class="muted">Boxes, classes and confidence values are embedded in this video.</p>
+      </div>
+    </section>
+  </main>
 <script>
 const imageList = document.getElementById("imageList");
 const sessionList = document.getElementById("sessionList");
@@ -398,6 +504,11 @@ const ctx = canvas.getContext("2d");
 const boxList = document.getElementById("boxList");
 const statusEl = document.getElementById("status");
 const newBoxClass = document.getElementById("newBoxClass");
+const predictionList = document.getElementById("predictionList");
+const predictionCount = document.getElementById("predictionCount");
+const predictionFolder = document.getElementById("predictionFolder");
+const predictionVideo = document.getElementById("predictionVideo");
+const predictionTitle = document.getElementById("predictionTitle");
 
 let images = [];
 let sessions = [];
@@ -405,6 +516,8 @@ let activeSession = null;
 let activeImage = null;
 let boxes = [];
 let drawing = null;
+let predictionVideos = [];
+let activePrediction = null;
 
 async function loadConfig() {
   const response = await fetch("/api/config");
@@ -416,11 +529,61 @@ async function loadConfig() {
     <code>${config.annotations_dir}</code><br><br>
     Supported: ${config.image_extensions.join(", ")}
   `;
+  predictionFolder.innerHTML = `Reading predictions from:<br><code>${config.predictions_dir}</code>`;
   if (config.detection_classes) {
     newBoxClass.innerHTML = config.detection_classes
       .map(name => `<option value="${name}">${name}</option>`)
       .join("");
   }
+}
+
+function selectView(viewId) {
+  document.querySelectorAll("main").forEach(view => view.classList.toggle("hidden", view.id !== viewId));
+  document.querySelectorAll(".view-tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));
+  if (viewId === "predictionView") loadPredictions().catch(error => setStatus(error.message, false));
+}
+
+async function loadPredictions() {
+  const response = await fetch("/api/predictions");
+  const data = await response.json();
+  predictionVideos = data.videos || [];
+  predictionCount.textContent = `${predictionVideos.length} prediction video(s)`;
+  renderPredictions();
+  if (!activePrediction && predictionVideos.length) selectPrediction(predictionVideos[0].id);
+}
+
+function renderPredictions() {
+  predictionList.innerHTML = "";
+  if (!predictionVideos.length) {
+    predictionList.innerHTML = `<p class="muted">No predicted videos found. Run <code>scripts/predict_yolo.py</code> first.</p>`;
+    predictionVideo.removeAttribute("src");
+    return;
+  }
+  let previousSession = null;
+  predictionVideos.forEach(video => {
+    if (video.session !== previousSession) {
+      const heading = document.createElement("h3");
+      heading.textContent = video.session;
+      predictionList.appendChild(heading);
+      previousSession = video.session;
+    }
+    const button = document.createElement("button");
+    button.className = "prediction-item" + (activePrediction === video.id ? " active" : "");
+    button.textContent = video.name;
+    button.title = video.id;
+    button.onclick = () => selectPrediction(video.id);
+    predictionList.appendChild(button);
+  });
+}
+
+function selectPrediction(videoId) {
+  const selected = predictionVideos.find(video => video.id === videoId);
+  if (!selected) return;
+  activePrediction = selected.id;
+  predictionTitle.textContent = `${selected.session} / ${selected.name}`;
+  predictionVideo.src = selected.url;
+  predictionVideo.load();
+  renderPredictions();
 }
 
 function setStatus(message, good = true) {
@@ -643,6 +806,10 @@ canvas.addEventListener("mouseup", () => {
 document.getElementById("undo").onclick = () => { boxes.pop(); renderAll(); };
 document.getElementById("clear").onclick = () => { boxes = []; renderAll(); };
 document.getElementById("refresh").onclick = loadSessions;
+document.getElementById("refreshPredictions").onclick = loadPredictions;
+document.querySelectorAll(".view-tab").forEach(tab => {
+  tab.onclick = () => selectView(tab.dataset.view);
+});
 document.getElementById("save").onclick = async () => {
   if (!activeImage) return;
   const payload = {

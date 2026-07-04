@@ -74,6 +74,12 @@ Example output:
 data/annotations/manual/session_001/truck_001.jpg.json
 ```
 
+## YOLO prediction viewer
+
+Prediction videos under `outputs/predictions` appear in the **YOLO predictions**
+tab. The default workbench command already points there. Use
+`--predictions-dir` only when results live somewhere else.
+
 This is deliberately simple. Later workbench milestones can add prediction
 overlays, YOLO export buttons, OCR review, video playback, and live camera
 streams.

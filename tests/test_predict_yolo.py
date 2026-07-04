@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scripts.predict_yolo import find_media, output_path_for
+from scripts.predict_yolo import build_browser_transcode_command, find_media, output_path_for
 
 
 class PredictYoloTests(unittest.TestCase):
@@ -26,6 +26,11 @@ class PredictYoloTests(unittest.TestCase):
         media = source / "session_006" / "truck.mp4"
         destination = output_path_for(source, media, Path("/outputs"))
         self.assertEqual(destination, Path("/outputs/session_006/truck_predicted.mp4"))
+
+    def test_browser_transcode_uses_h264(self) -> None:
+        command = build_browser_transcode_command(Path("input.mp4"), Path("output.mp4"))
+        self.assertIn("libx264", command)
+        self.assertIn("yuv420p", command)
 
 
 if __name__ == "__main__":

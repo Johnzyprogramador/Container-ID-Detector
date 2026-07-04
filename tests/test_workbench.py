@@ -9,6 +9,7 @@ from apps.workbench.app import (
     annotation_from_payload,
     annotation_path_for,
     list_images,
+    list_prediction_videos,
     list_sessions,
     safe_relative_path,
     session_id_from_image_id,
@@ -54,6 +55,19 @@ class WorkbenchTests(unittest.TestCase):
 
             self.assertEqual([item["id"] for item in images], ["session_002/b.png"])
             self.assertEqual([item["path"] for item in images], ["b.png"])
+
+    def test_list_prediction_videos_by_session(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "session_001").mkdir()
+            (root / "session_001" / "truck_predicted.mp4").write_bytes(b"")
+            (root / "summary.json").write_text("{}")
+
+            videos = list_prediction_videos(root)
+
+            self.assertEqual(len(videos), 1)
+            self.assertEqual(videos[0]["session"], "session_001")
+            self.assertEqual(videos[0]["url"], "/prediction-media/session_001/truck_predicted.mp4")
 
     def test_safe_relative_path_rejects_traversal(self) -> None:
         with TemporaryDirectory() as tmp:

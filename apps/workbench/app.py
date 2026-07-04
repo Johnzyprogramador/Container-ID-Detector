@@ -47,6 +47,7 @@ class WorkbenchConfig:
     host: str
     port: int
     predictions_dir: Path | None = None
+    benchmarks_dir: Path | None = None
 
 
 def safe_relative_path(root: Path, relative_path: str) -> Path:
@@ -142,6 +143,46 @@ def list_prediction_videos(predictions_dir: Path) -> list[dict[str, str]]:
     return videos
 
 
+def list_benchmark_matrices(benchmarks_dir: Path) -> list[dict]:
+    matrices = []
+    if not benchmarks_dir.exists():
+        return matrices
+    for matrix_path in sorted(benchmarks_dir.glob("*/matrix.json"), reverse=True):
+        matrix_dir = matrix_path.parent
+        try:
+            matrix = json.loads(matrix_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        runs = []
+        for run_dir in sorted(path for path in matrix_dir.iterdir() if path.is_dir()):
+            live_path = run_dir / "live.json"
+            status_path = run_dir / "status.json"
+            if not live_path.exists() and not status_path.exists():
+                continue
+            payload = {}
+            for candidate in (live_path, status_path):
+                if candidate.exists():
+                    try:
+                        payload = json.loads(candidate.read_text())
+                        break
+                    except (OSError, json.JSONDecodeError):
+                        pass
+            plots = []
+            plots_dir = run_dir / "plots"
+            if plots_dir.exists():
+                plots = [
+                    f"/benchmark-media/{matrix_dir.name}/{run_dir.name}/plots/{path.name}"
+                    for path in sorted(plots_dir.glob("*.png"))
+                ]
+            runs.append({"name": run_dir.name, "live": payload, "plots": plots})
+        comparison = [
+            f"/benchmark-media/{matrix_dir.name}/comparison_plots/{path.name}"
+            for path in sorted((matrix_dir / "comparison_plots").glob("*.png"))
+        ] if (matrix_dir / "comparison_plots").exists() else []
+        matrices.append({"id": matrix_dir.name, "matrix": matrix, "runs": runs, "comparison_plots": comparison})
+    return matrices
+
+
 def session_id_from_image_id(config: WorkbenchConfig, image_id: str) -> str:
     if config.session_id:
         return config.session_id
@@ -199,6 +240,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "image_extensions": sorted(IMAGE_EXTENSIONS),
                         "detection_classes": list(DETECTION_CLASSES),
                         "predictions_dir": str(self.config.predictions_dir or ""),
+                        "benchmarks_dir": str(self.config.benchmarks_dir or ""),
                     }
                 )
             elif parsed.path == "/api/sessions":
@@ -210,6 +252,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/predictions":
                 predictions_dir = self.config.predictions_dir or REPO_ROOT / "outputs" / "predictions"
                 self.send_json({"videos": list_prediction_videos(predictions_dir)})
+            elif parsed.path == "/api/benchmarks":
+                benchmarks_dir = self.config.benchmarks_dir or REPO_ROOT / "runs" / "benchmarks"
+                self.send_json({"matrices": list_benchmark_matrices(benchmarks_dir)})
             elif parsed.path == "/api/annotation":
                 query = parse_qs(parsed.query)
                 image_id = query.get("image", [""])[0]
@@ -218,6 +263,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self.handle_get_image(parsed.path.removeprefix("/images/"))
             elif parsed.path.startswith("/prediction-media/"):
                 self.handle_get_prediction(parsed.path.removeprefix("/prediction-media/"))
+            elif parsed.path.startswith("/benchmark-media/"):
+                self.handle_get_benchmark_media(parsed.path.removeprefix("/benchmark-media/"))
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
         except Exception as exc:  # pragma: no cover - safety net for UI errors
@@ -266,6 +313,14 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         media_path = safe_relative_path(predictions_dir, relative_path)
         if not media_path.is_file() or media_path.suffix.lower() not in VIDEO_EXTENSIONS:
             self.send_error(HTTPStatus.NOT_FOUND, "Prediction video not found")
+            return
+        self.send_file(media_path)
+
+    def handle_get_benchmark_media(self, relative_path: str) -> None:
+        benchmarks_dir = self.config.benchmarks_dir or REPO_ROOT / "runs" / "benchmarks"
+        media_path = safe_relative_path(benchmarks_dir, relative_path)
+        if not media_path.is_file() or media_path.suffix.lower() not in {".png", ".json", ".csv", ".log"}:
+            self.send_error(HTTPStatus.NOT_FOUND, "Benchmark artifact not found")
             return
         self.send_file(media_path)
 
@@ -372,6 +427,11 @@ def parse_args() -> argparse.Namespace:
         default="outputs/predictions",
         help="Folder containing YOLO prediction videos shown in the UI.",
     )
+    parser.add_argument(
+        "--benchmarks-dir",
+        default="runs/benchmarks",
+        help="Folder containing benchmark matrices shown in the UI.",
+    )
     parser.add_argument("--open-browser", action="store_true", help="Open a local browser tab.")
     return parser.parse_args()
 
@@ -386,6 +446,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         predictions_dir=Path(args.predictions_dir).resolve(),
+        benchmarks_dir=Path(args.benchmarks_dir).resolve(),
     )
     run_server(config, open_browser=args.open_browser)
 
@@ -431,6 +492,17 @@ INDEX_HTML = r"""<!doctype html>
     #predictionVideo { width: 100%; max-width: 1200px; max-height: calc(100vh - 140px); background: #000; }
     .prediction-item { width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .prediction-item.active { outline: 2px solid #ffb45e; }
+    #benchmarkView { grid-template-columns: 320px 1fr; }
+    .benchmark-sidebar { border-right: 1px solid #293241; padding: 12px; overflow: auto; }
+    .benchmark-content { padding: 18px; overflow: auto; }
+    .benchmark-item { width: 100%; text-align: left; margin-bottom: 6px; }
+    .benchmark-item.active { outline: 2px solid #8ee59b; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 12px 0; }
+    .metric-card { border: 1px solid #293241; border-radius: 10px; background: #151a22; padding: 12px; }
+    .metric-card strong { display: block; font-size: 20px; margin-top: 4px; }
+    .run-card { border: 1px solid #293241; border-radius: 10px; padding: 12px; margin: 12px 0; }
+    .plot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+    .plot-grid img { width: 100%; background: white; border-radius: 8px; }
   </style>
 </head>
 <body>
@@ -441,6 +513,7 @@ INDEX_HTML = r"""<!doctype html>
     <nav class="view-tabs">
       <button class="view-tab active" data-view="annotationView">Annotate</button>
       <button class="view-tab" data-view="predictionView">YOLO predictions</button>
+      <button class="view-tab" data-view="benchmarkView">Benchmarks</button>
     </nav>
   </header>
   <main id="annotationView">
@@ -493,6 +566,20 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
   </main>
+  <main id="benchmarkView" class="hidden">
+    <aside class="benchmark-sidebar">
+      <div class="toolbar"><button id="refreshBenchmarks">Refresh benchmarks</button></div>
+      <p class="muted" id="benchmarkFolder">Loading benchmark folder…</p>
+      <div id="benchmarkList"></div>
+    </aside>
+    <section class="benchmark-content">
+      <h2 id="benchmarkTitle">No benchmark selected</h2>
+      <p class="muted" id="benchmarkStatus"></p>
+      <div id="benchmarkRuns"></div>
+      <h2>CPU vs GPU comparisons</h2>
+      <div class="plot-grid" id="comparisonPlots"></div>
+    </section>
+  </main>
 <script>
 const imageList = document.getElementById("imageList");
 const sessionList = document.getElementById("sessionList");
@@ -509,6 +596,12 @@ const predictionCount = document.getElementById("predictionCount");
 const predictionFolder = document.getElementById("predictionFolder");
 const predictionVideo = document.getElementById("predictionVideo");
 const predictionTitle = document.getElementById("predictionTitle");
+const benchmarkFolder = document.getElementById("benchmarkFolder");
+const benchmarkList = document.getElementById("benchmarkList");
+const benchmarkTitle = document.getElementById("benchmarkTitle");
+const benchmarkStatus = document.getElementById("benchmarkStatus");
+const benchmarkRuns = document.getElementById("benchmarkRuns");
+const comparisonPlots = document.getElementById("comparisonPlots");
 
 let images = [];
 let sessions = [];
@@ -518,6 +611,9 @@ let boxes = [];
 let drawing = null;
 let predictionVideos = [];
 let activePrediction = null;
+let benchmarkMatrices = [];
+let activeBenchmark = null;
+let benchmarkPoll = null;
 
 async function loadConfig() {
   const response = await fetch("/api/config");
@@ -530,6 +626,7 @@ async function loadConfig() {
     Supported: ${config.image_extensions.join(", ")}
   `;
   predictionFolder.innerHTML = `Reading predictions from:<br><code>${config.predictions_dir}</code>`;
+  benchmarkFolder.innerHTML = `Reading benchmarks from:<br><code>${config.benchmarks_dir}</code>`;
   if (config.detection_classes) {
     newBoxClass.innerHTML = config.detection_classes
       .map(name => `<option value="${name}">${name}</option>`)
@@ -541,6 +638,84 @@ function selectView(viewId) {
   document.querySelectorAll("main").forEach(view => view.classList.toggle("hidden", view.id !== viewId));
   document.querySelectorAll(".view-tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));
   if (viewId === "predictionView") loadPredictions().catch(error => setStatus(error.message, false));
+  if (benchmarkPoll) clearInterval(benchmarkPoll);
+  if (viewId === "benchmarkView") {
+    loadBenchmarks().catch(error => setStatus(error.message, false));
+    benchmarkPoll = setInterval(() => loadBenchmarks(true).catch(() => {}), 5000);
+  }
+}
+
+async function loadBenchmarks(preserveSelection = false) {
+  const response = await fetch("/api/benchmarks");
+  const data = await response.json();
+  benchmarkMatrices = data.matrices || [];
+  if ((!preserveSelection || !activeBenchmark) && benchmarkMatrices.length) activeBenchmark = benchmarkMatrices[0].id;
+  renderBenchmarkList();
+  renderBenchmarkDetails();
+}
+
+function renderBenchmarkList() {
+  benchmarkList.innerHTML = "";
+  if (!benchmarkMatrices.length) {
+    benchmarkList.innerHTML = `<p class="muted">No benchmark matrices found yet.</p>`;
+    return;
+  }
+  benchmarkMatrices.forEach(item => {
+    const button = document.createElement("button");
+    button.className = "benchmark-item" + (item.id === activeBenchmark ? " active" : "");
+    button.textContent = `${item.id} — ${item.matrix.status || "unknown"}`;
+    button.onclick = () => { activeBenchmark = item.id; renderBenchmarkList(); renderBenchmarkDetails(); };
+    benchmarkList.appendChild(button);
+  });
+}
+
+function metricCard(label, value) {
+  return `<div class="metric-card"><span class="muted">${label}</span><strong>${value}</strong></div>`;
+}
+
+function formatNumber(value, digits = 1) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits) : "—";
+}
+
+function renderBenchmarkDetails() {
+  const selected = benchmarkMatrices.find(item => item.id === activeBenchmark);
+  if (!selected) return;
+  benchmarkTitle.textContent = selected.id;
+  benchmarkStatus.textContent = `Status: ${selected.matrix.status || "unknown"} · ${selected.runs.length} run folder(s)`;
+  benchmarkRuns.innerHTML = "";
+  selected.runs.forEach(run => {
+    const live = run.live || {};
+    const latency = live.latency_ms || live.latencies_ms?.end_to_end_ms || {};
+    const resource = live.latest_resource || Object.fromEntries(
+      Object.entries(live.resources || {}).map(([key, value]) => [key, value.average])
+    );
+    const progress = live.status === "complete" ? 100 : live.progress_percent;
+    const card = document.createElement("div");
+    card.className = "run-card";
+    card.innerHTML = `
+      <h3>${run.name} — ${live.status || "initializing"}</h3>
+      <div class="metric-grid">
+        ${metricCard("Progress", `${formatNumber(progress, 0)}%`)}
+        ${metricCard("Processed FPS", formatNumber(live.processed_fps, 2))}
+        ${metricCard("Dropped frames", live.dropped_frames ?? "—")}
+        ${metricCard("Queue depth", live.queue_depth ?? "—")}
+        ${metricCard("Average latency", `${formatNumber(latency.average)} ms`)}
+        ${metricCard("p95 latency", `${formatNumber(latency.p95)} ms`)}
+        ${metricCard("CPU", `${formatNumber(resource.cpu_percent)}%`)}
+        ${metricCard("CPU temperature", `${formatNumber(resource.cpu_temperature_c)} °C`)}
+        ${metricCard("CPU power", `${formatNumber(resource.cpu_power_w)} W`)}
+        ${metricCard("GPU", `${formatNumber(resource.gpu_util_percent)}%`)}
+        ${metricCard("GPU memory", `${formatNumber(resource.gpu_memory_mb)} MB`)}
+        ${metricCard("GPU temperature", `${formatNumber(resource.gpu_temperature_c)} °C`)}
+        ${metricCard("GPU power", `${formatNumber(resource.gpu_power_w)} W`)}
+      </div>
+      <div class="plot-grid">${run.plots.map(url => `<img src="${url}?t=${Date.now()}" alt="Benchmark plot">`).join("")}</div>
+    `;
+    benchmarkRuns.appendChild(card);
+  });
+  comparisonPlots.innerHTML = selected.comparison_plots
+    .map(url => `<img src="${url}?t=${Date.now()}" alt="Comparison plot">`).join("");
 }
 
 async function loadPredictions() {
@@ -807,6 +982,7 @@ document.getElementById("undo").onclick = () => { boxes.pop(); renderAll(); };
 document.getElementById("clear").onclick = () => { boxes = []; renderAll(); };
 document.getElementById("refresh").onclick = loadSessions;
 document.getElementById("refreshPredictions").onclick = loadPredictions;
+document.getElementById("refreshBenchmarks").onclick = () => loadBenchmarks(true);
 document.querySelectorAll(".view-tab").forEach(tab => {
   tab.onclick = () => selectView(tab.dataset.view);
 });

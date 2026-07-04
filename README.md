@@ -149,6 +149,49 @@ The first run downloads EasyOCR's English recognition weights. To view the
 generated OCR videos in the workbench, launch it with
 `--predictions-dir outputs/ocr_predictions`.
 
+## Four-camera CPU/GPU benchmark
+
+Install the complete benchmark environment:
+
+```bash
+pip install -e '.[detection,recognition,benchmark]'
+```
+
+Run a short smoke matrix before leaving a long experiment unattended:
+
+```bash
+python scripts/run_benchmarks.py \
+  --weights runs/detection/temporary_two_class_detector/weights/best.pt \
+  --source data/raw \
+  --modes cpu gpu \
+  --fps 1 \
+  --duration 30 \
+  --warmup 5 \
+  --matrix-id smoke
+```
+
+Run the complete ten-experiment matrix (four cameras, 1–5 FPS each, CPU and
+GPU, ten minutes per experiment):
+
+```bash
+python -u scripts/run_benchmarks.py \
+  --weights runs/detection/temporary_two_class_detector/weights/best.pt \
+  --source data/raw \
+  --modes cpu gpu \
+  --fps 1 2 3 4 5 \
+  --duration 600 \
+  --warmup 60
+```
+
+The runner flushes CSV rows continuously, isolates failures to one experiment,
+and writes status/error files before continuing. Pass a previous `--matrix-id`
+to resume it; completed runs are skipped. Each run receives latency, resource,
+event and drop summaries plus PNG plots. The matrix receives CPU-vs-GPU plots.
+
+Launch the workbench with `--benchmarks-dir runs/benchmarks`, open the
+**Benchmarks** tab, and leave it open while the command runs. It polls current
+progress and resource metrics every five seconds.
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

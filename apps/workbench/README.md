@@ -80,6 +80,13 @@ Prediction videos under `outputs/predictions` appear in the **YOLO predictions**
 tab. The default workbench command already points there. Use
 `--predictions-dir` only when results live somewhere else.
 
+## Benchmark monitor
+
+The **Benchmarks** tab monitors matrices under `runs/benchmarks`. It displays
+live progress while `scripts/run_benchmarks.py` is running and automatically
+shows per-run and cross-run plots when they are generated. The browser is only
+a monitor: closing it does not interrupt the benchmark process.
+
 This is deliberately simple. Later workbench milestones can add prediction
 overlays, YOLO export buttons, OCR review, video playback, and live camera
 streams.

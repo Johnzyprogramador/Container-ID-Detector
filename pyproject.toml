@@ -14,10 +14,14 @@ dependencies = []
 dev = ["pytest>=8", "ruff>=0.5"]
 detection = ["ultralytics>=8.3", "opencv-python>=4.9"]
 recognition = ["easyocr>=1.7.2", "opencv-python>=4.9"]
+benchmark = ["psutil>=6", "matplotlib>=3.9", "nvidia-ml-py>=13"]
 all = [
   "ultralytics>=8.3",
   "easyocr>=1.7.2",
   "opencv-python>=4.9",
+  "psutil>=6",
+  "matplotlib>=3.9",
+  "nvidia-ml-py>=13",
 ]
 
 [tool.setuptools.packages.find]

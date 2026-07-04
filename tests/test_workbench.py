@@ -9,6 +9,7 @@ from apps.workbench.app import (
     annotation_from_payload,
     annotation_path_for,
     list_images,
+    list_benchmark_matrices,
     list_prediction_videos,
     list_sessions,
     safe_relative_path,
@@ -68,6 +69,21 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(len(videos), 1)
             self.assertEqual(videos[0]["session"], "session_001")
             self.assertEqual(videos[0]["url"], "/prediction-media/session_001/truck_predicted.mp4")
+
+    def test_list_benchmark_matrices_includes_live_run(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matrix = root / "matrix_001"
+            run = matrix / "gpu_1fps"
+            run.mkdir(parents=True)
+            (matrix / "matrix.json").write_text('{"status": "running"}')
+            (run / "live.json").write_text('{"status": "running", "processed_frames": 20}')
+
+            matrices = list_benchmark_matrices(root)
+
+            self.assertEqual(matrices[0]["id"], "matrix_001")
+            self.assertEqual(matrices[0]["runs"][0]["name"], "gpu_1fps")
+            self.assertEqual(matrices[0]["runs"][0]["live"]["processed_frames"], 20)
 
     def test_safe_relative_path_rejects_traversal(self) -> None:
         with TemporaryDirectory() as tmp:

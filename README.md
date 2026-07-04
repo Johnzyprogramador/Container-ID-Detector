@@ -111,6 +111,19 @@ python scripts/train_yolo.py \
 Training outputs are written to this repository's absolute `runs/detection`
 directory, independently of any global Ultralytics `runs_dir` setting.
 
+Visualize the trained detector on every original video:
+
+```bash
+python scripts/predict_yolo.py \
+  --weights runs/detection/temporary_two_class_detector/weights/best.pt \
+  --source data/raw \
+  --output outputs/predictions \
+  --device 0
+```
+
+The command searches session folders recursively, saves annotated media while
+preserving those folders, and writes aggregate counts to `summary.json`.
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

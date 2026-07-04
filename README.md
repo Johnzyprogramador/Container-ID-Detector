@@ -124,6 +124,35 @@ python scripts/predict_yolo.py \
 The command searches session folders recursively, saves annotated media while
 preserving those folders, and writes aggregate counts to `summary.json`.
 
+## Add OCR to the detected crops
+
+Install PaddleOCR and one PaddlePaddle inference engine. For CPU:
+
+```bash
+pip install -e '.[recognition]'
+pip install paddlepaddle==3.3.0 \
+  -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+```
+
+For an NVIDIA GPU, install the official PaddlePaddle wheel matching the
+machine's supported CUDA package index (for example `cu118` or `cu126`) instead
+of the CPU wheel. Then run the combined pipeline:
+
+```bash
+python scripts/predict_yolo_ocr.py \
+  --weights runs/detection/temporary_two_class_detector/weights/best.pt \
+  --source data/raw \
+  --output outputs/ocr_predictions \
+  --yolo-device 0 \
+  --ocr-device gpu:0 \
+  --ocr-batch 8
+```
+
+The first run downloads `en_PP-OCRv5_mobile_rec`. Set
+`PADDLE_PDX_MODEL_SOURCE=BOS` if the machine cannot access Hugging Face. To view
+the generated OCR videos in the workbench, launch it with
+`--predictions-dir outputs/ocr_predictions`.
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

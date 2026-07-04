@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a two-class YOLO detector.")
@@ -16,6 +18,11 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--device", default="0", help="GPU index such as 0, or cpu")
     parser.add_argument("--name", default="temporary_two_class_detector")
+    parser.add_argument(
+        "--project",
+        default=str(REPO_ROOT / "runs" / "detection"),
+        help="Training output directory (defaults inside this repository).",
+    )
     args = parser.parse_args()
 
     try:
@@ -33,7 +40,7 @@ def main() -> None:
         imgsz=args.image_size,
         batch=args.batch,
         device=args.device,
-        project="runs/detection",
+        project=str(Path(args.project).resolve()),
         name=args.name,
     )
 

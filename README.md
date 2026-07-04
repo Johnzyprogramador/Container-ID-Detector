@@ -108,6 +108,9 @@ python scripts/train_yolo.py \
   --device 0
 ```
 
+Training outputs are written to this repository's absolute `runs/detection`
+directory, independently of any global Ultralytics `runs_dir` setting.
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

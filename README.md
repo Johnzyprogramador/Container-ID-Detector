@@ -192,6 +192,13 @@ Launch the workbench with `--benchmarks-dir runs/benchmarks`, open the
 **Benchmarks** tab, and leave it open while the command runs. It polls current
 progress and resource metrics every five seconds.
 
+Regenerate the combined all-experiment plots from an existing completed matrix
+without rerunning inference:
+
+```bash
+python scripts/plot_benchmarks.py --matrix runs/benchmarks/MATRIX_ID
+```
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

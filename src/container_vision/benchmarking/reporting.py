@@ -132,50 +132,133 @@ def generate_comparison_plots(matrix_dir: Path) -> list[str]:
     if not summaries:
         return generated
 
-    metrics = [
-        ("latency", "End-to-end latency (ms)", lambda item: item["latencies_ms"]["end_to_end_ms"]),
-        ("throughput", "Processed frames/second", lambda item: {"average": item["processed_fps"]}),
-        ("drops", "Dropped frames (%)", lambda item: {"average": item["dropped_percent"]}),
+    mode_order = {"cpu": 0, "gpu": 1}
+    summaries.sort(key=lambda item: (mode_order.get(item["mode"], 99), item["fps_per_camera"]))
+    labels = [
+        f"{item['mode'].upper()} {item['fps_per_camera']}\n({item['fps_per_camera'] * item['cameras']} total FPS)"
+        for item in summaries
     ]
-    for filename, ylabel, getter in metrics:
-        fig, ax = plt.subplots(figsize=(9, 6))
-        for mode in sorted({item["mode"] for item in summaries}):
-            selected = sorted((item for item in summaries if item["mode"] == mode), key=lambda item: item["fps_per_camera"])
-            fps = [item["fps_per_camera"] for item in selected]
-            values = [getter(item)["average"] for item in selected]
-            ax.plot(fps, values, marker="o", label=mode)
-            if filename == "latency":
-                ax.plot(fps, [getter(item)["p95"] for item in selected], marker="x", linestyle="--", label=f"{mode} p95")
-                ax.plot(fps, [getter(item)["p99"] for item in selected], marker=".", linestyle=":", label=f"{mode} p99")
-        ax.set(xlabel="FPS per camera", ylabel=ylabel, title=f"CPU vs GPU: {ylabel}")
-        ax.set_xticks(sorted({item["fps_per_camera"] for item in summaries}))
-        ax.grid(alpha=0.25)
-        ax.legend()
-        fig.tight_layout()
-        target = plots_dir / f"{filename}_comparison.png"
-        fig.savefig(target, dpi=150)
-        plt.close(fig)
-        generated.append(str(target.relative_to(matrix_dir)))
+    colors = ["#4f81bd" if item["mode"] == "cpu" else "#59a14f" for item in summaries]
+    x = list(range(len(summaries)))
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    resource_fields = [
-        ("cpu_percent", "Average CPU %"), ("ram_percent", "Average RAM %"),
-        ("gpu_util_percent", "Average GPU %"), ("gpu_memory_mb", "Average GPU memory MB"),
-    ]
-    for axis, (field, title) in zip(axes.flat, resource_fields):
-        for mode in sorted({item["mode"] for item in summaries}):
-            selected = sorted((item for item in summaries if item["mode"] == mode), key=lambda item: item["fps_per_camera"])
-            axis.plot(
-                [item["fps_per_camera"] for item in selected],
-                [item["resources"].get(field, {}).get("average", 0) for item in selected],
-                marker="o", label=mode,
-            )
-        axis.set_title(title)
+    # One directly comparable latency chart containing every experiment.
+    fig, ax = plt.subplots(figsize=(15, 7))
+    width = 0.25
+    latency = [item["latencies_ms"]["end_to_end_ms"] for item in summaries]
+    ax.bar([value - width for value in x], [item["average"] for item in latency], width, label="average")
+    ax.bar(x, [item["p95"] for item in latency], width, label="p95")
+    ax.bar([value + width for value in x], [item["p99"] for item in latency], width, label="p99")
+    ax.set_xticks(x, labels)
+    ax.set(ylabel="Milliseconds", title="All experiments: end-to-end latency")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    target = plots_dir / "all_experiments_latency.png"
+    fig.savefig(target, dpi=160)
+    plt.close(fig)
+    generated.append(str(target.relative_to(matrix_dir)))
+
+    # Capacity curve: requested load, achieved throughput and dropped percentage.
+    fig, (throughput_ax, drop_ax) = plt.subplots(2, 1, figsize=(11, 10))
+    maximum_requested = max(item["fps_per_camera"] * item["cameras"] for item in summaries)
+    throughput_ax.plot([0, maximum_requested], [0, maximum_requested], color="#888", linestyle="--", label="ideal")
+    for mode in ("cpu", "gpu"):
+        selected = [item for item in summaries if item["mode"] == mode]
+        if not selected:
+            continue
+        requested = [item["fps_per_camera"] * item["cameras"] for item in selected]
+        throughput_ax.plot(requested, [item["processed_fps"] for item in selected], marker="o", label=mode.upper())
+        drop_ax.plot(requested, [item["dropped_percent"] for item in selected], marker="o", label=mode.upper())
+    throughput_ax.set(ylabel="Processed FPS", title="Requested load versus achieved throughput")
+    drop_ax.set(xlabel="Requested total FPS", ylabel="Dropped frames (%)", title="Drops at each load")
+    for axis in (throughput_ax, drop_ax):
         axis.grid(alpha=0.25)
         axis.legend()
     fig.tight_layout()
-    target = plots_dir / "resource_comparison.png"
-    fig.savefig(target, dpi=150)
+    target = plots_dir / "capacity_and_drops.png"
+    fig.savefig(target, dpi=160)
+    plt.close(fig)
+    generated.append(str(target.relative_to(matrix_dir)))
+
+    # P95 stage heatmap reveals the component that saturates first.
+    stage_fields = [
+        "decode_ms", "queue_wait_ms", "yolo_preprocess_ms", "yolo_inference_ms",
+        "yolo_postprocess_ms", "crop_extraction_ms", "ocr_preprocess_ms",
+        "ocr_inference_ms", "ocr_postprocess_ms", "rules_event_ms",
+    ]
+    stage_labels = [field.removesuffix("_ms").replace("_", " ") for field in stage_fields]
+    stage_values = [
+        [item["latencies_ms"].get(field, {}).get("p95", 0) for field in stage_fields]
+        for item in summaries
+    ]
+    fig, ax = plt.subplots(figsize=(15, max(6, len(summaries) * 0.65)))
+    image = ax.imshow(stage_values, aspect="auto", cmap="YlOrRd")
+    ax.set_xticks(range(len(stage_labels)), stage_labels, rotation=35, ha="right")
+    ax.set_yticks(range(len(labels)), labels)
+    ax.set_title("All experiments: p95 latency by pipeline stage (ms)")
+    fig.colorbar(image, ax=ax, label="Milliseconds")
+    for row_index, row in enumerate(stage_values):
+        for column_index, value in enumerate(row):
+            ax.text(column_index, row_index, f"{value:.1f}", ha="center", va="center", fontsize=8)
+    fig.tight_layout()
+    target = plots_dir / "stage_latency_heatmap.png"
+    fig.savefig(target, dpi=160)
+    plt.close(fig)
+    generated.append(str(target.relative_to(matrix_dir)))
+
+    # Every experiment on one utilization chart.
+    fig, ax = plt.subplots(figsize=(15, 7))
+    width = 0.22
+    cpu = [item["resources"].get("cpu_percent", {}).get("average", 0) for item in summaries]
+    gpu = [item["resources"].get("gpu_util_percent", {}).get("average", 0) for item in summaries]
+    ram = [item["resources"].get("ram_percent", {}).get("average", 0) for item in summaries]
+    ax.bar([value - width for value in x], cpu, width, label="CPU %")
+    ax.bar(x, gpu, width, label="GPU %")
+    ax.bar([value + width for value in x], ram, width, label="RAM %")
+    ax.set_xticks(x, labels)
+    ax.set(ylabel="Average utilization (%)", title="All experiments: compute and memory utilization")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    target = plots_dir / "all_experiments_utilization.png"
+    fig.savefig(target, dpi=160)
+    plt.close(fig)
+    generated.append(str(target.relative_to(matrix_dir)))
+
+    # Memory footprint shown separately because MB cannot share a percentage axis.
+    fig, ax = plt.subplots(figsize=(15, 7))
+    width = 0.35
+    process_ram = [item["resources"].get("process_ram_mb", {}).get("average", 0) for item in summaries]
+    gpu_memory = [item["resources"].get("gpu_memory_mb", {}).get("average", 0) for item in summaries]
+    ax.bar([value - width / 2 for value in x], process_ram, width, color=colors, alpha=0.75, label="Process RAM MB")
+    ax.bar([value + width / 2 for value in x], gpu_memory, width, color="#e15759", alpha=0.75, label="GPU memory MB")
+    ax.set_xticks(x, labels)
+    ax.set(ylabel="Megabytes", title="All experiments: memory footprint")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    target = plots_dir / "all_experiments_memory.png"
+    fig.savefig(target, dpi=160)
+    plt.close(fig)
+    generated.append(str(target.relative_to(matrix_dir)))
+
+    # Thermal and power behavior across the complete matrix.
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    thermal_fields = [
+        ("cpu_temperature_c", "Average CPU temperature (°C)"),
+        ("gpu_temperature_c", "Average GPU temperature (°C)"),
+        ("cpu_power_w", "Average CPU power (W)"),
+        ("gpu_power_w", "Average GPU power (W)"),
+    ]
+    for axis, (field, title) in zip(axes.flat, thermal_fields):
+        values = [item["resources"].get(field, {}).get("average", 0) for item in summaries]
+        axis.bar(x, values, color=colors)
+        axis.set_xticks(x, labels, rotation=25, ha="right")
+        axis.set_title(title)
+        axis.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    target = plots_dir / "all_experiments_thermal_power.png"
+    fig.savefig(target, dpi=160)
     plt.close(fig)
     generated.append(str(target.relative_to(matrix_dir)))
     return generated

@@ -88,3 +88,26 @@ python scripts/extract_video_frames.py \
 
 Model dependencies will be introduced as optional groups when training and
 inference features are implemented.
+
+## Export and train the first detector
+
+Audit the local annotations, export a session-safe YOLO release, then train:
+
+```bash
+python scripts/audit_annotations.py
+
+python scripts/export_yolo_dataset.py \
+  --output data/datasets/two_class_v001 \
+  --validation-sessions session_006
+
+pip install -e '.[detection]'
+
+python scripts/train_yolo.py \
+  --dataset data/datasets/two_class_v001/data.yaml \
+  --model yolo11n.pt \
+  --device 0
+```
+
+The exported release contains copied images, YOLO labels, `data.yaml`, and a
+manifest recording classes, counts, and session assignments. Never overwrite a
+release used by an experiment; create `two_class_v002` instead.

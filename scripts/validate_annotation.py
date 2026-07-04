@@ -16,10 +16,9 @@ def main() -> None:
     annotation = ImageAnnotation.load(args.annotation)
     print(
         f"Valid: {annotation.image_id} "
-        f"({len(annotation.objects)} painted-number object(s))"
+        f"({len(annotation.objects)} annotated object(s))"
     )
 
 
 if __name__ == "__main__":
     main()
-

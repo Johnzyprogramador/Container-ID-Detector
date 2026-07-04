@@ -10,6 +10,7 @@ from .schemas import (
     ReviewStatus,
     Session,
 )
+from .yolo import AuditResult, audit_annotations, export_yolo_dataset
 
 __all__ = [
     "AnnotationObject",
@@ -20,4 +21,7 @@ __all__ = [
     "PAINTED_NUMBER_CLASS",
     "ReviewStatus",
     "Session",
+    "AuditResult",
+    "audit_annotations",
+    "export_yolo_dataset",
 ]

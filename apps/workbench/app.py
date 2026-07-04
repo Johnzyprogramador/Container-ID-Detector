@@ -722,6 +722,8 @@ function renderBenchmarkDetails() {
         ${metricCard("Average latency", `${formatNumber(latency.average)} ms`)}
         ${metricCard("p95 latency", `${formatNumber(latency.p95)} ms`)}
         ${metricCard("CPU", `${formatNumber(resource.cpu_percent)}%`)}
+        ${metricCard("Process RAM", `${formatNumber(resource.process_ram_mb)} MB`)}
+        ${metricCard("System RAM", `${formatNumber(resource.ram_percent)}%`)}
         ${metricCard("CPU temperature", `${formatNumber(resource.cpu_temperature_c)} °C`)}
         ${metricCard("CPU power", `${formatNumber(resource.cpu_power_w)} W`)}
         ${metricCard("GPU", `${formatNumber(resource.gpu_util_percent)}%`)}

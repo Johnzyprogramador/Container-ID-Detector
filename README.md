@@ -199,6 +199,14 @@ without rerunning inference:
 python scripts/plot_benchmarks.py --matrix runs/benchmarks/MATRIX_ID
 ```
 
+Combine a baseline and stress matrix into one set of plots:
+
+```bash
+python scripts/plot_benchmarks.py \
+  --matrix runs/benchmarks/BASELINE_ID runs/benchmarks/STRESS_ID \
+  --output runs/benchmarks/combined_capacity
+```
+
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Container Vision Field Capture</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, -apple-system, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0d1117; color: #edf2f7; }
+    header { padding: 18px; border-bottom: 1px solid #293241; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    h1, h2, p { margin-top: 0; }
+    h1 { font-size: 19px; margin-bottom: 0; }
+    main { max-width: 1100px; margin: auto; padding: 18px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+    button, select { background: #161d27; color: inherit; border: 1px solid #39475a; border-radius: 10px; padding: 11px 14px; font-size: 16px; }
+    button { cursor: pointer; }
+    button.active { border-color: #60a5fa; }
+    .record { width: 100%; padding: 18px; font-weight: 700; font-size: 20px; background: #15803d; }
+    .record.stop { background: #b91c1c; }
+    .card { background: #121821; border: 1px solid #293241; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+    .capture-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); gap: 16px; }
+    video { width: 100%; max-height: 68vh; background: black; border-radius: 12px; }
+    .controls { display: grid; gap: 14px; align-content: start; }
+    label { display: grid; gap: 7px; color: #aeb9c8; }
+    .status { padding: 11px; border-radius: 9px; background: #1a2230; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; }
+    .metric { background: #18202b; border-radius: 9px; padding: 11px; }
+    .metric span { display: block; color: #9daabd; font-size: 13px; }
+    .metric strong { font-size: 20px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 9px; text-align: left; border-bottom: 1px solid #293241; }
+    .muted { color: #9daabd; }
+    .live-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
+    .live-grid img { width: 100%; border-radius: 9px; background: #080b10; }
+    .hidden { display: none; }
+    @media (max-width: 760px) { .capture-grid { grid-template-columns: 1fr; } main { padding: 10px; } }
+  </style>
+</head>
+<body>
+<header><h1>Container Vision Field Capture</h1><span id="health" class="muted">Connecting…</span></header>
+<main>
+  <nav class="tabs">
+    <button class="tab active" data-view="capture">Record</button>
+    <button class="tab" data-view="dashboard">Sessions</button>
+  </nav>
+
+  <section id="capture">
+    <div class="capture-grid">
+      <div class="card"><video id="preview" autoplay muted playsinline></video><canvas id="sample" class="hidden"></canvas></div>
+      <div class="controls card">
+        <label>Logical streams
+          <select id="multiplier"><option value="1">1</option><option value="2" selected>2 (default)</option></select>
+        </label>
+        <button id="record" class="record">Start recording</button>
+        <div id="captureStatus" class="status">Ready</div>
+        <div class="metrics">
+          <div class="metric"><span>Elapsed</span><strong id="elapsed">00:00</strong></div>
+          <div class="metric"><span>Round trip</span><strong id="roundTrip">—</strong></div>
+          <div class="metric"><span>Server</span><strong id="serverTime">—</strong></div>
+          <div class="metric"><span>Detections</span><strong id="detections">0</strong></div>
+          <div class="metric"><span>Local backups</span><strong id="localBackups">0</strong></div>
+        </div>
+        <p class="muted">720p/30 FPS recording · 2 inference samples/second · CPU processing</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="dashboard" class="hidden">
+    <div class="card">
+      <h2>Capture sessions</h2>
+      <button id="refresh">Refresh</button>
+      <div style="overflow:auto"><table><thead><tr><th>Session</th><th>Status</th><th>Physical</th><th>Logical</th><th>Frames</th><th>Segments</th><th>Data</th></tr></thead><tbody id="sessions"></tbody></table></div>
+      <div id="liveResults" class="live-grid"></div>
+    </div>
+  </section>
+</main>
+<script>
+const preview = document.getElementById("preview");
+const canvas = document.getElementById("sample");
+const recordButton = document.getElementById("record");
+const statusBox = document.getElementById("captureStatus");
+let stream = null;
+let recorder = null;
+let session = null;
+let frameTimer = null;
+let elapsedTimer = null;
+let segmentTimer = null;
+let segmentChunks = [];
+let segmentIndex = 0;
+let sequence = 0;
+let startedAt = 0;
+let frameBusy = false;
+let recorderStopped = Promise.resolve();
+let localBackupCount = 0;
+let skippedFrames = 0;
+
+function openBackupDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("container-vision-field-capture", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("segments", {keyPath: "id"});
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveLocalBackup(sessionId, index, blob) {
+  const database = await openBackupDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("segments", "readwrite");
+    transaction.objectStore("segments").put({id: `${sessionId}:${index}`, sessionId, index, type: blob.type, createdAt: Date.now(), blob});
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+  localBackupCount += 1;
+  document.getElementById("localBackups").textContent = localBackupCount;
+}
+
+function mimeChoice() {
+  const choices = ["video/mp4;codecs=h264", "video/mp4", "video/webm;codecs=vp8", "video/webm"];
+  return choices.find(type => MediaRecorder.isTypeSupported(type)) || "";
+}
+
+function formatElapsed(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+async function api(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+async function startRecording() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+  });
+  preview.srcObject = stream;
+  session = await api("/api/sessions", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({logical_streams: Number(document.getElementById("multiplier").value), device_name: navigator.userAgent})
+  });
+  sequence = 0; segmentIndex = 0; localBackupCount = 0; skippedFrames = 0; startedAt = Date.now();
+  document.getElementById("localBackups").textContent = "0";
+  document.getElementById("multiplier").disabled = true;
+  recordButton.textContent = "Stop recording";
+  recordButton.classList.add("stop");
+  statusBox.textContent = `Recording ${session.session_id}`;
+  startSegment();
+  frameTimer = setInterval(sendInferenceFrame, 500);
+  elapsedTimer = setInterval(() => document.getElementById("elapsed").textContent = formatElapsed(Date.now() - startedAt), 1000);
+}
+
+function startSegment() {
+  segmentChunks = [];
+  const mimeType = mimeChoice();
+  recorder = new MediaRecorder(stream, mimeType ? {mimeType, videoBitsPerSecond: 2_000_000} : {videoBitsPerSecond: 2_000_000});
+  recorder.ondataavailable = event => { if (event.data.size) segmentChunks.push(event.data); };
+  recorderStopped = new Promise(resolve => {
+    recorder.onstop = () => uploadSegment().finally(resolve);
+  });
+  recorder.start(1000);
+  segmentTimer = setTimeout(() => recorder?.state === "recording" && recorder.stop(), 60_000);
+}
+
+async function uploadSegment() {
+  clearTimeout(segmentTimer);
+  if (!segmentChunks.length || !session) return;
+  const type = recorder.mimeType || segmentChunks[0].type || "video/webm";
+  const blob = new Blob(segmentChunks, {type});
+  const extension = type.includes("mp4") ? "mp4" : "webm";
+  const index = segmentIndex++;
+  try {
+    await saveLocalBackup(session.session_id, index, blob);
+  } catch (error) {
+    statusBox.textContent = `Local backup unavailable; cloud upload continuing (${error.message})`;
+  }
+  try {
+    await api(`/api/sessions/${session.session_id}/segments?index=${index}&extension=${extension}`, {method: "POST", headers: {"Content-Type": type}, body: blob});
+    statusBox.textContent = `Recording · saved segment ${index + 1}`;
+  } catch (error) { statusBox.textContent = `Cloud segment upload failed: ${error.message}`; }
+  if (stream?.active && session?.status !== "stopping") startSegment();
+}
+
+async function sendInferenceFrame() {
+  if (!session || preview.readyState < 2) return;
+  if (frameBusy) { skippedFrames += 1; return; }
+  frameBusy = true;
+  const requestStarted = performance.now();
+  try {
+    canvas.width = preview.videoWidth;
+    canvas.height = preview.videoHeight;
+    canvas.getContext("2d").drawImage(preview, 0, 0);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.82));
+    const currentSequence = sequence++;
+    const result = await api(`/api/sessions/${session.session_id}/frames?sequence=${currentSequence}&capture_time_ms=${Date.now()}&client_skipped=${skippedFrames}`, {method: "POST", headers: {"Content-Type": "image/jpeg"}, body: blob});
+    const roundTrip = performance.now() - requestStarted;
+    document.getElementById("roundTrip").textContent = `${roundTrip.toFixed(0)} ms`;
+    document.getElementById("serverTime").textContent = `${result.metrics.server_total_ms.toFixed(0)} ms`;
+    document.getElementById("detections").textContent = result.detections.length;
+    api(`/api/sessions/${session.session_id}/client-metrics`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({sequence: currentSequence, client_receive_time_ms: Date.now(), round_trip_ms: Number(roundTrip.toFixed(3))})}).catch(() => {});
+  } catch (error) { statusBox.textContent = `Frame error: ${error.message}`; }
+  finally { frameBusy = false; }
+}
+
+async function stopRecording() {
+  session.status = "stopping";
+  clearInterval(frameTimer); clearInterval(elapsedTimer); clearTimeout(segmentTimer);
+  if (recorder?.state === "recording") recorder.stop();
+  await recorderStopped;
+  stream?.getTracks().forEach(track => track.stop());
+  await api(`/api/sessions/${session.session_id}/stop`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  statusBox.textContent = `Saved ${session.session_id}`;
+  recordButton.textContent = "Start recording";
+  recordButton.classList.remove("stop");
+  document.getElementById("multiplier").disabled = false;
+  session = null; stream = null; recorder = null;
+  loadSessions();
+}
+
+recordButton.onclick = async () => {
+  recordButton.disabled = true;
+  try { session ? await stopRecording() : await startRecording(); }
+  catch (error) { statusBox.textContent = error.message; stream?.getTracks().forEach(track => track.stop()); session = null; }
+  finally { recordButton.disabled = false; }
+};
+
+async function loadSessions() {
+  const data = await api("/api/sessions");
+  document.getElementById("sessions").innerHTML = data.sessions.map(item => `<tr><td>${item.session_id}</td><td>${item.status}</td><td>1</td><td>${item.logical_streams}</td><td>${item.frames_received}</td><td>${item.segments_received}</td><td>${(item.bytes_received / 1048576).toFixed(1)} MB</td></tr>`).join("");
+  document.getElementById("liveResults").innerHTML = data.sessions.filter(item => item.latest_result?.sequence !== undefined).slice(0, 8).map(item => {
+    const result = item.latest_result;
+    const names = (result.detections || []).map(detection => `${detection.class_name} ${(detection.confidence * 100).toFixed(0)}%`).join(", ") || "No detections";
+    const roundTrip = result.metrics.client_round_trip_ms ? ` · ${Number(result.metrics.client_round_trip_ms).toFixed(0)} ms round trip` : "";
+    return `<div class="metric"><strong>${item.session_id}</strong><img src="/api/sessions/${item.session_id}/latest-frame?t=${Date.now()}" alt="Latest inference frame"><p>${names}</p><span>${result.metrics.server_total_ms.toFixed(0)} ms server${roundTrip} · ${item.logical_streams} logical stream(s) · ${result.metrics.client_skipped || 0} skipped</span></div>`;
+  }).join("");
+}
+
+document.getElementById("refresh").onclick = loadSessions;
+document.querySelectorAll(".tab").forEach(button => button.onclick = () => {
+  document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab === button));
+  ["capture", "dashboard"].forEach(id => document.getElementById(id).classList.toggle("hidden", id !== button.dataset.view));
+  if (button.dataset.view === "dashboard") loadSessions();
+});
+
+api("/api/health").then(data => {
+  document.getElementById("health").textContent = data.inference_enabled ? "CPU YOLO ready" : "Latency-only mode";
+}).catch(error => document.getElementById("health").textContent = error.message);
+loadSessions();
+setInterval(() => {
+  if (!document.getElementById("dashboard").classList.contains("hidden")) loadSessions().catch(() => {});
+}, 2000);
+</script>
+</body>
+</html>

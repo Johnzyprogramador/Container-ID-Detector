@@ -22,7 +22,8 @@ No datasets, model weights, or generated runs belong in Git.
 ## Layout
 
 ```text
-apps/workbench/          future annotation and inference UI
+apps/workbench/          annotation, prediction, and benchmark UI
+apps/field_capture/      mobile browser recording and cloud-latency prototype
 configs/                 versioned training and pipeline defaults
 docs/                    data format and annotation rules
 src/container_vision/    reusable data and vision library
@@ -210,3 +211,25 @@ python scripts/plot_benchmarks.py \
 The exported release contains copied images, YOLO labels, `data.yaml`, and a
 manifest recording classes, counts, and session assignments. Never overwrite a
 release used by an experiment; create `two_class_v002` instead.
+
+## Mobile field capture
+
+The local-first field service provides a minimal phone recorder, rolling cloud
+video segments, 2 FPS sampled CPU inference, 1x/2x logical-load simulation, and
+per-frame latency records. Start in latency-only mode:
+
+```bash
+pip install -e '.[field]'
+python apps/field_capture/app.py --host 127.0.0.1 --port 8080
+```
+
+Or enable the custom CPU YOLO model:
+
+```bash
+python apps/field_capture/app.py \
+  --host 0.0.0.0 --port 8080 \
+  --weights runs/detection/temporary_two_class_detector/weights/best.pt
+```
+
+See [apps/field_capture/README.md](apps/field_capture/README.md) for the session
+layout, Docker command, local browser limitations, and cloud migration notes.

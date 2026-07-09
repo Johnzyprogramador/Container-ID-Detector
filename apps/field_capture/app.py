@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import sys
 import time
 from http import HTTPStatus
@@ -27,6 +28,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
     store: SessionStore
     detector: CpuYoloDetector
     max_upload_bytes: int
+    auth_token: str | None
 
     def log_message(self, format: str, *args: object) -> None:
         sys.stderr.write(f"[field-capture] {self.address_string()} - {format % args}\n")
@@ -37,10 +39,33 @@ class CaptureHandler(BaseHTTPRequestHandler):
             if parsed.path in {"/", "/index.html"}:
                 self.send_file(STATIC_DIR / "index.html")
             elif parsed.path == "/api/health":
-                self.send_json({"ok": True, "inference_enabled": self.detector.enabled, "device": "cpu"})
+                self.send_json(
+                    {
+                        "ok": True,
+                        "inference_enabled": self.detector.enabled,
+                        "device": "cpu",
+                        "auth_required": bool(self.auth_token),
+                    }
+                )
             elif parsed.path == "/api/sessions":
+                if not self.authorized():
+                    return
                 self.send_json({"sessions": self.store.list()})
+            elif parsed.path.endswith("/download.zip") and parsed.path.startswith("/api/sessions/"):
+                if not self.authorized():
+                    return
+                session_id = parsed.path.removeprefix("/api/sessions/").removesuffix(
+                    "/download.zip"
+                ).strip("/")
+                archive_path = self.store.get(session_id).archive()
+                self.send_file(
+                    archive_path,
+                    content_type="application/zip",
+                    attachment_name=archive_path.name,
+                )
             elif parsed.path.endswith("/latest-frame") and parsed.path.startswith("/api/sessions/"):
+                if not self.authorized():
+                    return
                 session_id = parsed.path.removeprefix("/api/sessions/").removesuffix("/latest-frame").strip("/")
                 session = self.store.get(session_id)
                 sequence = session.latest_result.get("sequence")
@@ -51,6 +76,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
                         session.directory / "inference_frames" / f"frame_{int(sequence):08d}.jpg"
                     )
             elif parsed.path.startswith("/api/sessions/"):
+                if not self.authorized():
+                    return
                 session_id = parsed.path.removeprefix("/api/sessions/").split("/", 1)[0]
                 self.send_json(self.store.get(session_id).metadata())
             else:
@@ -63,6 +90,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         try:
             parsed = urlparse(self.path)
+            if not self.authorized():
+                return
             if parsed.path == "/api/sessions":
                 payload = self.read_json()
                 session = self.store.create(
@@ -141,13 +170,36 @@ class CaptureHandler(BaseHTTPRequestHandler):
     def read_json(self) -> dict:
         return json.loads(self.read_body().decode("utf-8"))
 
-    def send_file(self, path: Path) -> None:
+    def authorized(self) -> bool:
+        if not self.auth_token:
+            return True
+        header = self.headers.get("Authorization", "")
+        bearer = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
+        query_token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        provided = self.headers.get("X-Field-Capture-Token", "") or bearer or query_token
+        if provided == self.auth_token:
+            return True
+        self.send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+        return False
+
+    def send_file(
+        self,
+        path: Path,
+        *,
+        content_type: str | None = None,
+        attachment_name: str | None = None,
+    ) -> None:
         if not path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         content = path.read_bytes()
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header(
+            "Content-Type",
+            content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        )
+        if attachment_name:
+            self.send_header("Content-Disposition", f'attachment; filename="{attachment_name}"')
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
@@ -162,25 +214,44 @@ class CaptureHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
 
-def make_handler(store: SessionStore, detector: CpuYoloDetector, max_upload_mb: int):
+def make_handler(
+    store: SessionStore,
+    detector: CpuYoloDetector,
+    max_upload_mb: int,
+    auth_token: str | None,
+):
     class ConfiguredHandler(CaptureHandler):
         pass
 
     ConfiguredHandler.store = store
     ConfiguredHandler.detector = detector
     ConfiguredHandler.max_upload_bytes = max_upload_mb * 1024 * 1024
+    ConfiguredHandler.auth_token = auth_token
     return ConfiguredHandler
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the mobile field-capture service.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--storage-dir", default="data/field_captures")
-    parser.add_argument("--weights", default=None, help="Custom YOLO weights; omit for latency-only mode")
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
+    parser.add_argument(
+        "--storage-dir", default=os.environ.get("FIELD_CAPTURE_STORAGE_DIR", "data/field_captures")
+    )
+    parser.add_argument(
+        "--weights",
+        default=os.environ.get("FIELD_CAPTURE_WEIGHTS") or None,
+        help="Custom YOLO weights; omit for latency-only mode",
+    )
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--image-size", type=int, default=640)
-    parser.add_argument("--max-upload-mb", type=int, default=250)
+    parser.add_argument(
+        "--max-upload-mb", type=int, default=int(os.environ.get("MAX_UPLOAD_MB", "250"))
+    )
+    parser.add_argument(
+        "--auth-token",
+        default=os.environ.get("FIELD_CAPTURE_TOKEN") or None,
+        help="Optional token required by API requests; pass it to the UI with ?token=...",
+    )
     return parser.parse_args()
 
 
@@ -190,11 +261,13 @@ def main() -> None:
     store = SessionStore(Path(args.storage_dir))
     detector = CpuYoloDetector(weights, confidence=args.confidence, image_size=args.image_size)
     server = ThreadingHTTPServer(
-        (args.host, args.port), make_handler(store, detector, args.max_upload_mb)
+        (args.host, args.port),
+        make_handler(store, detector, args.max_upload_mb, args.auth_token),
     )
     print(f"Field capture running at http://{args.host}:{args.port}")
     print(f"Storage: {store.root}")
     print(f"Inference: {'CPU YOLO ' + str(weights) if weights else 'latency-only (no weights)'}")
+    print(f"Auth: {'enabled' if args.auth_token else 'disabled'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

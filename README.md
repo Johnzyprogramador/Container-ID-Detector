@@ -232,4 +232,5 @@ python apps/field_capture/app.py \
 ```
 
 See [apps/field_capture/README.md](apps/field_capture/README.md) for the session
-layout, Docker command, local browser limitations, and cloud migration notes.
+layout, Docker command, Cloud Run deployment commands, local browser limitations,
+token auth, ZIP export, and temporary-storage caveats.

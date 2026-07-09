@@ -4,6 +4,7 @@ import csv
 import json
 import re
 import threading
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -137,6 +138,20 @@ class CaptureSession:
             self.status = "complete"
             self.stopped_at = utc_now()
             self.save_metadata()
+
+    def archive(self) -> Path:
+        """Create a downloadable ZIP snapshot of the session directory."""
+        validate_id(self.session_id, "session id")
+        self.save_metadata()
+        archive_path = self.directory / f"{self.session_id}.zip"
+        temporary = archive_path.with_suffix(".zip.tmp")
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(self.directory.rglob("*")):
+                if not path.is_file() or path == temporary or path == archive_path:
+                    continue
+                archive.write(path, path.relative_to(self.directory))
+        temporary.replace(archive_path)
+        return archive_path
 
 
 class SessionStore:

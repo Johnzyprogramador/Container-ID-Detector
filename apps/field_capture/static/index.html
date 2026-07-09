@@ -22,6 +22,7 @@
     .capture-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); gap: 16px; }
     video { width: 100%; max-height: 68vh; background: black; border-radius: 12px; }
     .controls { display: grid; gap: 14px; align-content: start; }
+    a { color: #93c5fd; }
     label { display: grid; gap: 7px; color: #aeb9c8; }
     .status { padding: 11px; border-radius: 9px; background: #1a2230; }
     .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; }
@@ -34,6 +35,8 @@
     .live-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
     .live-grid img { width: 100%; border-radius: 9px; background: #080b10; }
     .hidden { display: none; }
+    .auth { display: none; margin-bottom: 14px; }
+    .auth.show { display: block; }
     @media (max-width: 760px) { .capture-grid { grid-template-columns: 1fr; } main { padding: 10px; } }
   </style>
 </head>
@@ -46,6 +49,12 @@
   </nav>
 
   <section id="capture">
+    <div id="authNotice" class="card auth">
+      <strong>Access token needed</strong>
+      <p class="muted">Open this page with <code>?token=YOUR_TOKEN</code> once, or enter it here.</p>
+      <input id="tokenInput" placeholder="Field capture token" style="width:100%;padding:12px;border-radius:10px;border:1px solid #39475a;background:#0d1117;color:#edf2f7">
+      <button id="saveToken" style="margin-top:10px">Save token</button>
+    </div>
     <div class="capture-grid">
       <div class="card"><video id="preview" autoplay muted playsinline></video><canvas id="sample" class="hidden"></canvas></div>
       <div class="controls card">
@@ -70,7 +79,7 @@
     <div class="card">
       <h2>Capture sessions</h2>
       <button id="refresh">Refresh</button>
-      <div style="overflow:auto"><table><thead><tr><th>Session</th><th>Status</th><th>Physical</th><th>Logical</th><th>Frames</th><th>Segments</th><th>Data</th></tr></thead><tbody id="sessions"></tbody></table></div>
+      <div style="overflow:auto"><table><thead><tr><th>Session</th><th>Status</th><th>Physical</th><th>Logical</th><th>Frames</th><th>Segments</th><th>Data</th><th>Export</th></tr></thead><tbody id="sessions"></tbody></table></div>
       <div id="liveResults" class="live-grid"></div>
     </div>
   </section>
@@ -94,6 +103,23 @@ let frameBusy = false;
 let recorderStopped = Promise.resolve();
 let localBackupCount = 0;
 let skippedFrames = 0;
+let apiToken = "";
+
+function initializeToken() {
+  const params = new URLSearchParams(window.location.search);
+  apiToken = params.get("token") || sessionStorage.getItem("fieldCaptureToken") || localStorage.getItem("fieldCaptureToken") || "";
+  if (apiToken) {
+    sessionStorage.setItem("fieldCaptureToken", apiToken);
+    localStorage.setItem("fieldCaptureToken", apiToken);
+    if (params.has("token")) {
+      history.replaceState({}, document.title, window.location.pathname);
+    }
+  }
+}
+
+function authHeaders(extra = {}) {
+  return apiToken ? {...extra, "X-Field-Capture-Token": apiToken} : extra;
+}
 
 function openBackupDatabase() {
   return new Promise((resolve, reject) => {
@@ -128,9 +154,13 @@ function formatElapsed(milliseconds) {
 }
 
 async function api(url, options = {}) {
+  options.headers = authHeaders(options.headers || {});
   const response = await fetch(url, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) {
+    if (response.status === 401) document.getElementById("authNotice").classList.add("show");
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
   return data;
 }
 
@@ -231,14 +261,30 @@ recordButton.onclick = async () => {
 
 async function loadSessions() {
   const data = await api("/api/sessions");
-  document.getElementById("sessions").innerHTML = data.sessions.map(item => `<tr><td>${item.session_id}</td><td>${item.status}</td><td>1</td><td>${item.logical_streams}</td><td>${item.frames_received}</td><td>${item.segments_received}</td><td>${(item.bytes_received / 1048576).toFixed(1)} MB</td></tr>`).join("");
+  document.getElementById("sessions").innerHTML = data.sessions.map(item => {
+    const token = apiToken ? `?token=${encodeURIComponent(apiToken)}` : "";
+    const download = `/api/sessions/${item.session_id}/download.zip${token}`;
+    return `<tr><td>${item.session_id}</td><td>${item.status}</td><td>1</td><td>${item.logical_streams}</td><td>${item.frames_received}</td><td>${item.segments_received}</td><td>${(item.bytes_received / 1048576).toFixed(1)} MB</td><td><a href="${download}">ZIP</a></td></tr>`;
+  }).join("");
   document.getElementById("liveResults").innerHTML = data.sessions.filter(item => item.latest_result?.sequence !== undefined).slice(0, 8).map(item => {
     const result = item.latest_result;
     const names = (result.detections || []).map(detection => `${detection.class_name} ${(detection.confidence * 100).toFixed(0)}%`).join(", ") || "No detections";
     const roundTrip = result.metrics.client_round_trip_ms ? ` · ${Number(result.metrics.client_round_trip_ms).toFixed(0)} ms round trip` : "";
-    return `<div class="metric"><strong>${item.session_id}</strong><img src="/api/sessions/${item.session_id}/latest-frame?t=${Date.now()}" alt="Latest inference frame"><p>${names}</p><span>${result.metrics.server_total_ms.toFixed(0)} ms server${roundTrip} · ${item.logical_streams} logical stream(s) · ${result.metrics.client_skipped || 0} skipped</span></div>`;
+    const token = apiToken ? `&token=${encodeURIComponent(apiToken)}` : "";
+    return `<div class="metric"><strong>${item.session_id}</strong><img src="/api/sessions/${item.session_id}/latest-frame?t=${Date.now()}${token}" alt="Latest inference frame"><p>${names}</p><span>${result.metrics.server_total_ms.toFixed(0)} ms server${roundTrip} · ${item.logical_streams} logical stream(s) · ${result.metrics.client_skipped || 0} skipped</span></div>`;
   }).join("");
 }
+
+initializeToken();
+document.getElementById("saveToken").onclick = () => {
+  apiToken = document.getElementById("tokenInput").value.trim();
+  if (apiToken) {
+    sessionStorage.setItem("fieldCaptureToken", apiToken);
+    localStorage.setItem("fieldCaptureToken", apiToken);
+    document.getElementById("authNotice").classList.remove("show");
+    loadSessions().catch(error => statusBox.textContent = error.message);
+  }
+};
 
 document.getElementById("refresh").onclick = loadSessions;
 document.querySelectorAll(".tab").forEach(button => button.onclick = () => {
@@ -249,6 +295,7 @@ document.querySelectorAll(".tab").forEach(button => button.onclick = () => {
 
 api("/api/health").then(data => {
   document.getElementById("health").textContent = data.inference_enabled ? "CPU YOLO ready" : "Latency-only mode";
+  if (data.auth_required && !apiToken) document.getElementById("authNotice").classList.add("show");
 }).catch(error => document.getElementById("health").textContent = error.message);
 loadSessions();
 setInterval(() => {

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from container_vision.field_capture.sessions import SessionStore, validate_id
@@ -42,6 +43,40 @@ class FieldCaptureTests(unittest.TestCase):
             self.assertEqual(metadata["status"], "complete")
             self.assertEqual(metadata["frames_received"], 1)
             self.assertEqual(metadata["segments_received"], 1)
+
+    def test_session_archive_contains_capture_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = SessionStore(Path(temporary)).create(logical_streams=1)
+            session.save_segment(0, b"video", "mp4")
+            session.save_frame_result(
+                1,
+                b"jpeg",
+                {
+                    "detections": [],
+                    "metrics": {
+                        "sequence": 1,
+                        "capture_time_ms": 10,
+                        "server_receive_time_ms": 20,
+                        "decode_ms": 1,
+                        "inference_ms": 0,
+                        "server_total_ms": 2,
+                        "logical_streams": 1,
+                        "detections": 0,
+                        "jpeg_bytes": 4,
+                        "client_skipped": 0,
+                    },
+                },
+            )
+            archive_path = session.archive()
+
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+
+            self.assertIn("session.json", names)
+            self.assertIn("cloud_recording/segment_00000.mp4", names)
+            self.assertIn("inference_frames/frame_00000001.jpg", names)
+            self.assertIn("results/frame_00000001.json", names)
+            self.assertIn("metrics/frames.csv", names)
 
     def test_rejects_invalid_multiplier(self):
         with tempfile.TemporaryDirectory() as temporary:

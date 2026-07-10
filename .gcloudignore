@@ -1,0 +1,36 @@
+# Controls what `gcloud run deploy --source .` uploads to Cloud Build.
+# Mirrors .dockerignore so the build context matches a local docker build.
+# Without this file, gcloud would fall back to .gitignore (which excludes
+# models/field/best.pt) — so keep the deployment model path allowed here.
+.git
+.venv
+__pycache__
+*.pyc
+*.egg-info
+.pytest_cache
+.ruff_cache
+.cache
+.DS_Store
+
+# Local evidence and generated artifacts should not be uploaded.
+data
+runs
+outputs
+
+# Keep only the optional deployment model path.
+models/*
+!models/README.md
+!models/field
+!models/field/**
+
+# Local secrets and environment files.
+.env
+.env.*
+
+# Large ad-hoc model files outside the deployment model folder.
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+!models/field/*.pt

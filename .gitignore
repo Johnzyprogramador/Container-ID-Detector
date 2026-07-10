@@ -12,6 +12,8 @@ data/*
 !data/README.md
 models/*
 !models/README.md
+!models/field/
+!models/field/README.md
 runs/*
 !runs/README.md
 outputs/*

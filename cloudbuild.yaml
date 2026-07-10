@@ -1,0 +1,28 @@
+# Builds the field-capture image with cross-build Docker layer caching.
+#
+# It pulls the previous :latest image and uses it as a BuildKit inline cache
+# source, so unchanged layers (notably the CPU-only PyTorch install) are reused
+# instead of rebuilt. The first build is a cache miss (full build); every build
+# after reuses cached layers.
+#
+# Invoked by scripts/deploy_field_capture.sh, which passes
+#   _IMAGE=REGION-docker.pkg.dev/PROJECT/REPO/SERVICE
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    env:
+      - 'DOCKER_BUILDKIT=1'
+    args:
+      - '-c'
+      - |
+        docker pull "${_IMAGE}:latest" || true
+        docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "${_IMAGE}:latest" \
+          -t "${_IMAGE}:latest" \
+          -f Dockerfile .
+images:
+  - '${_IMAGE}:latest'
+options:
+  # Required when the build runs as the Compute Engine default service account.
+  logging: CLOUD_LOGGING_ONLY

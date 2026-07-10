@@ -83,6 +83,21 @@ Cloud Run provides HTTPS automatically on the generated `*.run.app` URL. The
 container should still listen with normal HTTP internally; Cloud Run terminates
 TLS before forwarding traffic to the app.
 
+### Simplest path (one command)
+
+`scripts/deploy_field_capture.sh` builds on Cloud Build and deploys in one step:
+
+```bash
+# Latency-only (no detector model):
+./scripts/deploy_field_capture.sh teste-501920
+
+# With the real detector — copies your weights into place, then deploys:
+./scripts/deploy_field_capture.sh teste-501920 --model /path/to/your/best.pt
+```
+
+See `models/field/README.md` for how to add the detector model. The manual
+Artifact Registry steps below remain available if you prefer them.
+
 Build with your local model baked into the image:
 
 ```bash

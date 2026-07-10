@@ -12,6 +12,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import mimetypes
 import sys
@@ -48,6 +49,7 @@ class WorkbenchConfig:
     port: int
     predictions_dir: Path | None = None
     benchmarks_dir: Path | None = None
+    field_captures_dir: Path | None = None
 
 
 def safe_relative_path(root: Path, relative_path: str) -> Path:
@@ -183,6 +185,149 @@ def list_benchmark_matrices(benchmarks_dir: Path) -> list[dict]:
     return matrices
 
 
+def numeric(value: object) -> float | None:
+    try:
+        if value in {"", None}:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize_values(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"count": 0, "average": None, "p95": None, "p99": None, "min": None, "max": None}
+    ordered = sorted(values)
+
+    def percentile(fraction: float) -> float:
+        if len(ordered) == 1:
+            return ordered[0]
+        position = (len(ordered) - 1) * fraction
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+    return {
+        "count": len(values),
+        "average": sum(values) / len(values),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+        "min": ordered[0],
+        "max": ordered[-1],
+    }
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    with path.open(newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def list_field_capture_sessions(field_captures_dir: Path) -> list[dict]:
+    sessions = []
+    if not field_captures_dir.exists():
+        return sessions
+    for metadata_path in sorted(field_captures_dir.glob("*/session.json"), reverse=True):
+        session_dir = metadata_path.parent
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        frame_rows = read_csv_rows(session_dir / "metrics" / "frames.csv")
+        client_rows = read_csv_rows(session_dir / "metrics" / "client.csv")
+        client_by_sequence = {
+            str(row.get("sequence", "")): row
+            for row in client_rows
+            if str(row.get("sequence", "")) != ""
+        }
+        points = []
+        for row in frame_rows:
+            sequence = str(row.get("sequence", ""))
+            client = client_by_sequence.get(sequence, {})
+            points.append(
+                {
+                    "sequence": numeric(sequence),
+                    "server_total_ms": numeric(row.get("server_total_ms")),
+                    "decode_ms": numeric(row.get("decode_ms")),
+                    "inference_ms": numeric(row.get("inference_ms")),
+                    "round_trip_ms": numeric(client.get("round_trip_ms")),
+                    "jpeg_bytes": numeric(row.get("jpeg_bytes")),
+                    "client_skipped": numeric(row.get("client_skipped")),
+                    "detections": numeric(row.get("detections")),
+                }
+            )
+
+        videos = []
+        for path in sorted((session_dir / "cloud_recording").glob("*")):
+            if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+                relative = path.relative_to(field_captures_dir).as_posix()
+                videos.append(
+                    {
+                        "id": relative,
+                        "name": path.name,
+                        "url": f"/field-capture-media/{relative}",
+                        "bytes": path.stat().st_size,
+                    }
+                )
+
+        frames = []
+        for path in sorted((session_dir / "inference_frames").glob("*")):
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                relative = path.relative_to(field_captures_dir).as_posix()
+                frames.append(
+                    {
+                        "id": relative,
+                        "name": path.name,
+                        "url": f"/field-capture-media/{relative}",
+                    }
+                )
+
+        summaries = {
+            "server_total_ms": summarize_values(
+                [value for value in (point["server_total_ms"] for point in points) if value is not None]
+            ),
+            "round_trip_ms": summarize_values(
+                [value for value in (point["round_trip_ms"] for point in points) if value is not None]
+            ),
+            "decode_ms": summarize_values(
+                [value for value in (point["decode_ms"] for point in points) if value is not None]
+            ),
+            "inference_ms": summarize_values(
+                [value for value in (point["inference_ms"] for point in points) if value is not None]
+            ),
+            "jpeg_bytes": summarize_values(
+                [value for value in (point["jpeg_bytes"] for point in points) if value is not None]
+            ),
+        }
+        sessions.append(
+            {
+                "id": metadata.get("session_id") or session_dir.name,
+                "name": session_dir.name,
+                "metadata": metadata,
+                "videos": videos,
+                "frames": frames,
+                "points": points,
+                "summaries": summaries,
+                "metrics": {
+                    "frame_rows": len(frame_rows),
+                    "client_rows": len(client_rows),
+                    "total_client_skipped": sum(
+                        value
+                        for value in (point["client_skipped"] for point in points)
+                        if value is not None
+                    ),
+                    "total_frame_detections": sum(
+                        value for value in (point["detections"] for point in points) if value is not None
+                    ),
+                },
+            }
+        )
+    return sessions
+
+
 def session_id_from_image_id(config: WorkbenchConfig, image_id: str) -> str:
     if config.session_id:
         return config.session_id
@@ -241,6 +386,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "detection_classes": list(DETECTION_CLASSES),
                         "predictions_dir": str(self.config.predictions_dir or ""),
                         "benchmarks_dir": str(self.config.benchmarks_dir or ""),
+                        "field_captures_dir": str(self.config.field_captures_dir or ""),
                     }
                 )
             elif parsed.path == "/api/sessions":
@@ -255,6 +401,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/benchmarks":
                 benchmarks_dir = self.config.benchmarks_dir or REPO_ROOT / "runs" / "benchmarks"
                 self.send_json({"matrices": list_benchmark_matrices(benchmarks_dir)})
+            elif parsed.path == "/api/field-captures":
+                field_captures_dir = self.config.field_captures_dir or REPO_ROOT / "data" / "field_captures"
+                self.send_json({"sessions": list_field_capture_sessions(field_captures_dir)})
             elif parsed.path == "/api/annotation":
                 query = parse_qs(parsed.query)
                 image_id = query.get("image", [""])[0]
@@ -265,6 +414,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 self.handle_get_prediction(parsed.path.removeprefix("/prediction-media/"))
             elif parsed.path.startswith("/benchmark-media/"):
                 self.handle_get_benchmark_media(parsed.path.removeprefix("/benchmark-media/"))
+            elif parsed.path.startswith("/field-capture-media/"):
+                self.handle_get_field_capture_media(
+                    parsed.path.removeprefix("/field-capture-media/")
+                )
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
         except Exception as exc:  # pragma: no cover - safety net for UI errors
@@ -321,6 +474,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         media_path = safe_relative_path(benchmarks_dir, relative_path)
         if not media_path.is_file() or media_path.suffix.lower() not in {".png", ".json", ".csv", ".log"}:
             self.send_error(HTTPStatus.NOT_FOUND, "Benchmark artifact not found")
+            return
+        self.send_file(media_path)
+
+    def handle_get_field_capture_media(self, relative_path: str) -> None:
+        field_captures_dir = self.config.field_captures_dir or REPO_ROOT / "data" / "field_captures"
+        media_path = safe_relative_path(field_captures_dir, relative_path)
+        allowed = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | {".json", ".csv", ".zip"}
+        if not media_path.is_file() or media_path.suffix.lower() not in allowed:
+            self.send_error(HTTPStatus.NOT_FOUND, "Field capture artifact not found")
             return
         self.send_file(media_path)
 
@@ -432,6 +594,11 @@ def parse_args() -> argparse.Namespace:
         default="runs/benchmarks",
         help="Folder containing benchmark matrices shown in the UI.",
     )
+    parser.add_argument(
+        "--field-captures-dir",
+        default="data/field_captures",
+        help="Folder containing extracted field-capture ZIP sessions shown in the UI.",
+    )
     parser.add_argument("--open-browser", action="store_true", help="Open a local browser tab.")
     return parser.parse_args()
 
@@ -447,6 +614,7 @@ def main() -> None:
         port=args.port,
         predictions_dir=Path(args.predictions_dir).resolve(),
         benchmarks_dir=Path(args.benchmarks_dir).resolve(),
+        field_captures_dir=Path(args.field_captures_dir).resolve(),
     )
     run_server(config, open_browser=args.open_browser)
 
@@ -493,16 +661,27 @@ INDEX_HTML = r"""<!doctype html>
     .prediction-item { width: 100%; text-align: left; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .prediction-item.active { outline: 2px solid #ffb45e; }
     #benchmarkView { grid-template-columns: 320px 1fr; }
+    #fieldCaptureView { grid-template-columns: 340px 1fr; }
     .benchmark-sidebar { border-right: 1px solid #293241; padding: 12px; overflow: auto; }
+    .field-sidebar { border-right: 1px solid #293241; padding: 12px; overflow: auto; }
     .benchmark-content { padding: 18px; overflow: auto; }
+    .field-content { padding: 18px; overflow: auto; }
     .benchmark-item { width: 100%; text-align: left; margin-bottom: 6px; }
     .benchmark-item.active { outline: 2px solid #8ee59b; }
+    .field-item { width: 100%; text-align: left; margin-bottom: 6px; }
+    .field-item.active { outline: 2px solid #c084fc; }
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 12px 0; }
     .metric-card { border: 1px solid #293241; border-radius: 10px; background: #151a22; padding: 12px; }
     .metric-card strong { display: block; font-size: 20px; margin-top: 4px; }
     .run-card { border: 1px solid #293241; border-radius: 10px; padding: 12px; margin: 12px 0; }
     .plot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
     .plot-grid img { width: 100%; background: white; border-radius: 8px; }
+    .chart { width: 100%; height: 250px; background: #151a22; border: 1px solid #293241; border-radius: 10px; margin: 12px 0; }
+    .chart svg { width: 100%; height: 100%; display: block; }
+    .media-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 14px; align-items: start; }
+    .media-grid video, .media-grid img { width: 100%; border-radius: 10px; background: #000; }
+    .segment-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+    .segment-list button.active { outline: 2px solid #c084fc; }
   </style>
 </head>
 <body>
@@ -514,6 +693,7 @@ INDEX_HTML = r"""<!doctype html>
       <button class="view-tab active" data-view="annotationView">Annotate</button>
       <button class="view-tab" data-view="predictionView">YOLO predictions</button>
       <button class="view-tab" data-view="benchmarkView">Benchmarks</button>
+      <button class="view-tab" data-view="fieldCaptureView">Field captures</button>
     </nav>
   </header>
   <main id="annotationView">
@@ -583,6 +763,37 @@ INDEX_HTML = r"""<!doctype html>
       <div class="plot-grid" id="comparisonPlots"></div>
     </section>
   </main>
+  <main id="fieldCaptureView" class="hidden">
+    <aside class="field-sidebar">
+      <div class="toolbar">
+        <button id="refreshFieldCaptures">Refresh captures</button>
+      </div>
+      <p class="muted" id="fieldCaptureFolder">Loading field-capture folder…</p>
+      <p class="muted" id="fieldCaptureCount"></p>
+      <div id="fieldCaptureList"></div>
+    </aside>
+    <section class="field-content">
+      <h2 id="fieldCaptureTitle">No field capture selected</h2>
+      <p class="muted" id="fieldCaptureStatus"></p>
+      <div id="fieldCaptureSummary" class="metric-grid"></div>
+      <div class="media-grid">
+        <div>
+          <h3>Recorded video segments</h3>
+          <div id="fieldSegmentList" class="segment-list"></div>
+          <video id="fieldCaptureVideo" controls playsinline preload="metadata"></video>
+        </div>
+        <div>
+          <h3>Sampled inference frame</h3>
+          <img id="fieldCaptureFrame" alt="Latest sampled frame">
+          <p class="muted">These are the JPEG frames sent to the backend for timing/inference.</p>
+        </div>
+      </div>
+      <h3>Latency over time</h3>
+      <div id="fieldLatencyChart" class="chart"></div>
+      <h3>Pipeline stages</h3>
+      <div id="fieldStageChart" class="chart"></div>
+    </section>
+  </main>
 <script>
 const imageList = document.getElementById("imageList");
 const sessionList = document.getElementById("sessionList");
@@ -607,6 +818,17 @@ const benchmarkRuns = document.getElementById("benchmarkRuns");
 const comparisonPlots = document.getElementById("comparisonPlots");
 const benchmarkContent = document.querySelector(".benchmark-content");
 const toggleBenchmarkPolling = document.getElementById("toggleBenchmarkPolling");
+const fieldCaptureFolder = document.getElementById("fieldCaptureFolder");
+const fieldCaptureCount = document.getElementById("fieldCaptureCount");
+const fieldCaptureList = document.getElementById("fieldCaptureList");
+const fieldCaptureTitle = document.getElementById("fieldCaptureTitle");
+const fieldCaptureStatus = document.getElementById("fieldCaptureStatus");
+const fieldCaptureSummary = document.getElementById("fieldCaptureSummary");
+const fieldSegmentList = document.getElementById("fieldSegmentList");
+const fieldCaptureVideo = document.getElementById("fieldCaptureVideo");
+const fieldCaptureFrame = document.getElementById("fieldCaptureFrame");
+const fieldLatencyChart = document.getElementById("fieldLatencyChart");
+const fieldStageChart = document.getElementById("fieldStageChart");
 
 let images = [];
 let sessions = [];
@@ -620,6 +842,9 @@ let benchmarkMatrices = [];
 let activeBenchmark = null;
 let benchmarkPoll = null;
 let benchmarkPollingEnabled = true;
+let fieldCaptures = [];
+let activeFieldCapture = null;
+let activeFieldSegment = null;
 
 async function loadConfig() {
   const response = await fetch("/api/config");
@@ -633,6 +858,7 @@ async function loadConfig() {
   `;
   predictionFolder.innerHTML = `Reading predictions from:<br><code>${config.predictions_dir}</code>`;
   benchmarkFolder.innerHTML = `Reading benchmarks from:<br><code>${config.benchmarks_dir}</code>`;
+  fieldCaptureFolder.innerHTML = `Reading field captures from:<br><code>${config.field_captures_dir}</code>`;
   if (config.detection_classes) {
     newBoxClass.innerHTML = config.detection_classes
       .map(name => `<option value="${name}">${name}</option>`)
@@ -644,6 +870,7 @@ function selectView(viewId) {
   document.querySelectorAll("main").forEach(view => view.classList.toggle("hidden", view.id !== viewId));
   document.querySelectorAll(".view-tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));
   if (viewId === "predictionView") loadPredictions().catch(error => setStatus(error.message, false));
+  if (viewId === "fieldCaptureView") loadFieldCaptures().catch(error => setStatus(error.message, false));
   if (benchmarkPoll) clearInterval(benchmarkPoll);
   if (viewId === "benchmarkView") {
     loadBenchmarks().catch(error => setStatus(error.message, false));
@@ -781,6 +1008,179 @@ function selectPrediction(videoId) {
   predictionVideo.src = selected.url;
   predictionVideo.load();
   renderPredictions();
+}
+
+async function loadFieldCaptures() {
+  const response = await fetch("/api/field-captures");
+  const data = await response.json();
+  fieldCaptures = data.sessions || [];
+  fieldCaptureCount.textContent = `${fieldCaptures.length} field capture session(s)`;
+  if (!activeFieldCapture && fieldCaptures.length) activeFieldCapture = fieldCaptures[0].id;
+  renderFieldCaptureList();
+  renderFieldCaptureDetails();
+}
+
+function renderFieldCaptureList() {
+  fieldCaptureList.innerHTML = "";
+  if (!fieldCaptures.length) {
+    fieldCaptureList.innerHTML = `
+      <p class="muted">
+        No extracted field captures found. Unzip each Cloud Run/session ZIP into
+        <code>data/field_captures/&lt;session_id&gt;/</code>.
+      </p>
+    `;
+    return;
+  }
+  fieldCaptures.forEach(item => {
+    const meta = item.metadata || {};
+    const button = document.createElement("button");
+    button.className = "field-item" + (item.id === activeFieldCapture ? " active" : "");
+    button.innerHTML = `
+      <strong>${item.name}</strong><br>
+      <span class="muted">${meta.status || "unknown"} · ${item.videos.length} video(s) · ${item.metrics.frame_rows} frame row(s)</span>
+    `;
+    button.onclick = () => {
+      activeFieldCapture = item.id;
+      activeFieldSegment = null;
+      renderFieldCaptureList();
+      renderFieldCaptureDetails();
+    };
+    fieldCaptureList.appendChild(button);
+  });
+}
+
+function summaryValue(summary, key, digits = 1) {
+  return summary?.[key] === null || summary?.[key] === undefined ? "—" : formatNumber(summary[key], digits);
+}
+
+function renderFieldCaptureDetails() {
+  const selected = fieldCaptures.find(item => item.id === activeFieldCapture);
+  if (!selected) {
+    fieldCaptureTitle.textContent = "No field capture selected";
+    fieldCaptureStatus.textContent = "";
+    fieldCaptureSummary.innerHTML = "";
+    fieldSegmentList.innerHTML = "";
+    fieldCaptureVideo.removeAttribute("src");
+    fieldCaptureFrame.removeAttribute("src");
+    fieldLatencyChart.innerHTML = "";
+    fieldStageChart.innerHTML = "";
+    return;
+  }
+  const meta = selected.metadata || {};
+  const roundTrip = selected.summaries.round_trip_ms;
+  const server = selected.summaries.server_total_ms;
+  const inference = selected.summaries.inference_ms;
+  const decode = selected.summaries.decode_ms;
+  fieldCaptureTitle.textContent = selected.name;
+  fieldCaptureStatus.textContent = [
+    `Status: ${meta.status || "unknown"}`,
+    `Started: ${meta.started_at || "—"}`,
+    `Logical streams: ${meta.logical_streams ?? "—"}`,
+    `Rows: ${selected.metrics.frame_rows} server / ${selected.metrics.client_rows} client`,
+  ].join(" · ");
+  fieldCaptureSummary.innerHTML = `
+    ${metricCard("Avg round trip", `${summaryValue(roundTrip, "average")} ms`)}
+    ${metricCard("p95 / p99 round trip", `${summaryValue(roundTrip, "p95")} / ${summaryValue(roundTrip, "p99")} ms`)}
+    ${metricCard("Avg server total", `${summaryValue(server, "average")} ms`)}
+    ${metricCard("p95 / p99 server", `${summaryValue(server, "p95")} / ${summaryValue(server, "p99")} ms`)}
+    ${metricCard("Avg inference", `${summaryValue(inference, "average")} ms`)}
+    ${metricCard("Avg decode", `${summaryValue(decode, "average")} ms`)}
+    ${metricCard("Skipped intervals", formatNumber(selected.metrics.total_client_skipped, 0))}
+    ${metricCard("Detections", formatNumber(meta.detections ?? selected.metrics.total_frame_detections, 0))}
+    ${metricCard("Uploaded data", `${formatNumber((meta.bytes_received || 0) / 1048576, 1)} MB`)}
+  `;
+  renderFieldSegments(selected);
+  if (selected.frames.length) {
+    fieldCaptureFrame.src = selected.frames[selected.frames.length - 1].url;
+  } else {
+    fieldCaptureFrame.removeAttribute("src");
+  }
+  renderLineChart(fieldLatencyChart, selected.points, [
+    {key: "round_trip_ms", label: "round trip", color: "#c084fc"},
+    {key: "server_total_ms", label: "server total", color: "#60a5fa"},
+  ]);
+  renderLineChart(fieldStageChart, selected.points, [
+    {key: "decode_ms", label: "decode", color: "#8ee59b"},
+    {key: "inference_ms", label: "inference", color: "#ffb45e"},
+    {key: "server_total_ms", label: "server total", color: "#60a5fa"},
+  ]);
+}
+
+function renderFieldSegments(selected) {
+  fieldSegmentList.innerHTML = "";
+  if (!selected.videos.length) {
+    fieldSegmentList.innerHTML = `<p class="muted">No video segments found in this session.</p>`;
+    fieldCaptureVideo.removeAttribute("src");
+    return;
+  }
+  if (!activeFieldSegment || !selected.videos.find(video => video.id === activeFieldSegment)) {
+    activeFieldSegment = selected.videos[0].id;
+  }
+  selected.videos.forEach((video, index) => {
+    const button = document.createElement("button");
+    button.className = activeFieldSegment === video.id ? "active" : "";
+    button.textContent = `Segment ${index + 1}`;
+    button.title = `${video.name} · ${(video.bytes / 1048576).toFixed(1)} MB`;
+    button.onclick = () => {
+      activeFieldSegment = video.id;
+      renderFieldSegments(selected);
+    };
+    fieldSegmentList.appendChild(button);
+  });
+  const selectedVideo = selected.videos.find(video => video.id === activeFieldSegment);
+  if (selectedVideo && fieldCaptureVideo.src !== selectedVideo.url) {
+    fieldCaptureVideo.src = selectedVideo.url;
+    fieldCaptureVideo.load();
+  }
+}
+
+function renderLineChart(container, points, series) {
+  const clean = points
+    .filter(point => Number.isFinite(Number(point.sequence)))
+    .map(point => ({...point, sequence: Number(point.sequence)}));
+  const values = [];
+  clean.forEach(point => {
+    series.forEach(item => {
+      const value = Number(point[item.key]);
+      if (Number.isFinite(value)) values.push(value);
+    });
+  });
+  if (!clean.length || !values.length) {
+    container.innerHTML = `<p class="muted" style="padding:12px">No metric rows available for this chart.</p>`;
+    return;
+  }
+  const width = 900;
+  const height = 250;
+  const pad = {left: 54, right: 20, top: 20, bottom: 34};
+  const minX = Math.min(...clean.map(point => point.sequence));
+  const maxX = Math.max(...clean.map(point => point.sequence));
+  const minY = 0;
+  const maxY = Math.max(1, ...values) * 1.08;
+  const x = value => pad.left + ((value - minX) / Math.max(1, maxX - minX)) * (width - pad.left - pad.right);
+  const y = value => height - pad.bottom - ((value - minY) / Math.max(1, maxY - minY)) * (height - pad.top - pad.bottom);
+  const lines = series.map(item => {
+    const coords = clean
+      .map(point => ({x: x(point.sequence), y: y(Number(point[item.key]))}))
+      .filter(point => Number.isFinite(point.y))
+      .map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+      .join(" ");
+    return coords ? `<polyline fill="none" stroke="${item.color}" stroke-width="2" points="${coords}" />` : "";
+  }).join("");
+  const legend = series.map((item, index) =>
+    `<g transform="translate(${pad.left + index * 150}, ${height - 10})"><rect width="10" height="10" fill="${item.color}"/><text x="16" y="10" fill="#eef2f7" font-size="12">${item.label}</text></g>`
+  ).join("");
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img">
+      <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#3a4658"/>
+      <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#3a4658"/>
+      <text x="10" y="${pad.top + 5}" fill="#aab4c3" font-size="12">${maxY.toFixed(0)} ms</text>
+      <text x="18" y="${height - pad.bottom}" fill="#aab4c3" font-size="12">0 ms</text>
+      <text x="${pad.left}" y="${height - 16}" fill="#aab4c3" font-size="12">frame ${minX}</text>
+      <text x="${width - 105}" y="${height - 16}" fill="#aab4c3" font-size="12">frame ${maxX}</text>
+      ${lines}
+      ${legend}
+    </svg>
+  `;
 }
 
 function setStatus(message, good = true) {
@@ -1005,6 +1405,7 @@ document.getElementById("clear").onclick = () => { boxes = []; renderAll(); };
 document.getElementById("refresh").onclick = loadSessions;
 document.getElementById("refreshPredictions").onclick = loadPredictions;
 document.getElementById("refreshBenchmarks").onclick = () => loadBenchmarks(true);
+document.getElementById("refreshFieldCaptures").onclick = loadFieldCaptures;
 toggleBenchmarkPolling.onclick = () => {
   benchmarkPollingEnabled = !benchmarkPollingEnabled;
   toggleBenchmarkPolling.textContent = benchmarkPollingEnabled ? "Pause live updates" : "Resume live updates";

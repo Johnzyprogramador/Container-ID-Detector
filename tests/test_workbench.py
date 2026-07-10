@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,7 @@ from apps.workbench.app import (
     WorkbenchConfig,
     annotation_from_payload,
     annotation_path_for,
+    list_field_capture_sessions,
     list_images,
     list_benchmark_matrices,
     list_prediction_videos,
@@ -84,6 +86,47 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(matrices[0]["id"], "matrix_001")
             self.assertEqual(matrices[0]["runs"][0]["name"], "gpu_1fps")
             self.assertEqual(matrices[0]["runs"][0]["live"]["processed_frames"], 20)
+
+    def test_list_field_capture_sessions_summarizes_metrics_and_media(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = root / "capture_001"
+            (session / "cloud_recording").mkdir(parents=True)
+            (session / "inference_frames").mkdir()
+            (session / "metrics").mkdir()
+            (session / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "capture_001",
+                        "status": "complete",
+                        "logical_streams": 2,
+                        "bytes_received": 1024,
+                    }
+                )
+            )
+            (session / "cloud_recording" / "segment_00000.mp4").write_bytes(b"video")
+            (session / "inference_frames" / "frame_00000001.jpg").write_bytes(b"jpeg")
+            (session / "metrics" / "frames.csv").write_text(
+                "sequence,server_total_ms,decode_ms,inference_ms,jpeg_bytes,client_skipped,detections\n"
+                "1,10,2,0,100,0,0\n"
+                "2,20,3,0,120,1,0\n"
+            )
+            (session / "metrics" / "client.csv").write_text(
+                "sequence,client_receive_time_ms,round_trip_ms\n"
+                "1,1000,50\n"
+                "2,1100,70\n"
+            )
+
+            captures = list_field_capture_sessions(root)
+
+            self.assertEqual(captures[0]["id"], "capture_001")
+            self.assertEqual(captures[0]["videos"][0]["url"], "/field-capture-media/capture_001/cloud_recording/segment_00000.mp4")
+            self.assertEqual(captures[0]["frames"][0]["url"], "/field-capture-media/capture_001/inference_frames/frame_00000001.jpg")
+            self.assertEqual(captures[0]["metrics"]["frame_rows"], 2)
+            self.assertEqual(captures[0]["metrics"]["client_rows"], 2)
+            self.assertEqual(captures[0]["metrics"]["total_client_skipped"], 1)
+            self.assertEqual(captures[0]["summaries"]["round_trip_ms"]["average"], 60)
+            self.assertAlmostEqual(captures[0]["summaries"]["server_total_ms"]["p99"], 19.9)
 
     def test_safe_relative_path_rejects_traversal(self) -> None:
         with TemporaryDirectory() as tmp:

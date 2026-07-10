@@ -234,3 +234,32 @@ python apps/field_capture/app.py \
 See [apps/field_capture/README.md](apps/field_capture/README.md) for the session
 layout, Docker command, Cloud Run deployment commands, local browser limitations,
 token auth, ZIP export, and temporary-storage caveats.
+
+## Review Cloud Run field-capture ZIPs
+
+After a factory/cloud test, download each session ZIP from the field-capture
+**Sessions** tab and unpack it under `data/field_captures`:
+
+```bash
+mkdir -p data/field_captures
+
+for zip in ~/Downloads/container_capture_zips/*.zip; do
+  name=$(basename "$zip" .zip)
+  mkdir -p "data/field_captures/$name"
+  unzip -o "$zip" -d "data/field_captures/$name"
+done
+```
+
+Then open the main workbench and use the **Field captures** tab:
+
+```bash
+python apps/workbench/app.py \
+  --host 0.0.0.0 \
+  --port 7860 \
+  --field-captures-dir data/field_captures
+```
+
+The viewer reads `session.json`, `cloud_recording/`, `inference_frames/`,
+`metrics/frames.csv`, and `metrics/client.csv`. It works for latency-only runs
+and for later YOLO-enabled Cloud Run runs. Latency-only runs will show round-trip
+and server/decode timings, but inference and detections will be zero.
